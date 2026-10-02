@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`) and 3 (`internal/export`, `polymarket export markets|events|outcomes`) implemented; the rest is design. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`) and 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level) implemented; the rest is design. Opening a tag shows only its share of the sampled events until milestone 5 puts the real listing there. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor and the tag lookup on 2026-10-02.
 
 ## 1. Summary
 
@@ -25,7 +25,7 @@ Same baseline as grid (`go 1.26.6` in go.mod; fang + cobra entry point; Bubble T
 | Module | Version | Used for |
 |---|---|---|
 | `charm.land/bubbletea/v2` | v2.0.10 | program loop, messages, commands |
-| `charm.land/bubbles/v2` | v2.2.1 | `table`, `textinput`, `viewport`, `spinner`, `progress`, `help`, `key` |
+| `charm.land/bubbles/v2` | v2.2.1 | `textinput`, `viewport`, `spinner`, `progress`, `help`, `key` |
 | `charm.land/lipgloss/v2` | v2.0.6 | layout, borders, colour, tabs |
 | `charm.land/huh/v2` | v2.0.3 | the export dialog and filter form |
 | `charm.land/log/v2` | v2.0.1 | `--debug` log file (never the screen) |
@@ -36,6 +36,13 @@ No Polymarket SDK: the read endpoints are plain JSON over HTTPS and a hand-writt
 of a few hundred lines is easier to test and keeps trading/signing code out of the binary.
 The price sparkline is hand-rolled (block characters, ~60 lines) rather than pulling in a
 chart library.
+
+The lists are hand-rolled too (`ui/list.go`, ~190 lines) rather than `bubbles/table`,
+which was the plan. That table leaves the cursor outside its window when the cursor is
+set rather than moved, which is what re-sorting or refreshing a list under the cursor
+does; it cannot right-align a column of numbers; and its highlight stops at the last
+column instead of the edge. The list also owns the dropping of columns in a narrow
+window (§5).
 
 ## 3. Layout of the repository
 
@@ -56,11 +63,12 @@ internal/api/               HTTP client for the three services
 internal/export/            datasets -> CSV (no UI imports)
     dataset.go              Dataset interface, column schemas
     csv.go                  writer: temp file + atomic rename, or stdout
-internal/format/            money ($1.2M), price (66.5¢), deltas, relative dates
+internal/format/            money ($1.2M); to come: price (66.5¢), deltas, relative dates
 internal/ui/                Bubble Tea models
-    model.go                root model: screen stack, size, status bar, routing
-    tags.go                 top level: ranked tag list, sub-tags
-    browse.go               Events / Markets lists over bubbles/table, scoped to a tag
+    model.go                root model: screen stack, size, frame, breadcrumb, status bar, routing
+    list.go                 the table every level is drawn as: columns, cursor, scrolling
+    tags.go                 top level: the sample, aggregation, ranked tag list, find
+    browse.go               Events / Markets lists, scoped to a tag
     detail.go               one market: summary, book, sparkline, trades
     filter.go               huh filter form
     exportdlg.go            huh export dialog + progress
@@ -110,8 +118,24 @@ reflects what is actually trading, with numbers worth showing in columns. It is 
 once per session and on `r`; the fetched events are kept, so opening a tag shows its rows
 immediately while the complete, server-filtered list (`tag_slug=`) loads behind them.
 
-The figures are therefore "among the top 500 events", and the header says so. A tag that
-does not appear there is still reachable by typing its name (`/tags/slug/{slug}`).
+The five requests run **one after another**, not in parallel as first planned: the cursor
+is opaque and signed, so page 2 cannot be asked for before page 1 has answered, and a
+`limit` above 100 is cut to 100 without complaint. It does not matter. A page is 9–15 MB
+of JSON and takes about half a second; the rows are ranked over whatever has arrived, so
+the list is on screen after the first page (0.6 s measured) and settles when the fifth is
+in (1.5 s). A refresh is the other way round: the rows on screen stay until the new
+sample is complete, since half a sample is a worse ranking than the old one.
+
+The figures are therefore "among the top 500 events", and the header says so, with the
+number actually held. A tag that does not appear there is still reachable by typing its
+name (`/tags/slug/{slug}`).
+
+About 480 tags come out of the 500 events. They are keyed by ID, not slug: an event may
+embed a tag under a slug whose case differs from the one the lookup reports
+(`Global-Rates` against `global-rates`). Polymarket's own bookkeeping tags are among them
+(`Hide From New`, `Recurring`, `Earn 4%`) and are listed like any other: the only flag
+that looks made for hiding them, `forceHide`, is set on Sports and Politics and on none
+of those.
 
 ### Quirks the client must absorb (all observed live)
 
@@ -131,6 +155,11 @@ does not appear there is still reachable by typing its name (`/tags/slug/{slug}`
 - `/events/keyset` answers an unknown `tag_slug` with an empty page, not an error, so a
   tag typed by hand is checked with `/tags/slug/{slug}` first. `/markets/keyset` has no
   `tag_slug` at all and needs that lookup anyway for the `tag_id`.
+- `/tags/slug/{slug}` ignores case, answers an unknown slug with 404 and one with a space
+  in it with 422 ("slug is invalid"), so a name typed at the find prompt is lower-cased
+  and hyphenated before it is looked up.
+- The keyset cursor is opaque and signed, and `limit` above 100 is silently 100: there is
+  no fetching pages of one listing in parallel.
 - polymarket.com serves a market at `/event/<event slug>/<market slug>`;
   `/market/<market slug>` redirects there, which is what a market known without its
   event links to.
@@ -199,7 +228,11 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
 1. **Tags** (top level, the start screen) — one row per tag, ranked by 24 h volume, with
    event count and liquidity (§4, "Where the tag list comes from"). The first row is
    **All**, which opens the next level with no tag filter. `/` narrows the list as you
-   type; if nothing matches, `enter` looks the typed name up as a slug.
+   type, by label or slug, with the cursor on the best match; `enter` opens the row under
+   the cursor, or, if nothing matches, looks the typed name up as a slug. The find stays
+   set after `enter` and on the way back up, until `esc` clears it. `s` cycles the sort
+   (24 h volume, events, liquidity, name) and `S` reverses it; both sort the sample in
+   hand, with no request, and leave the cursor on its tag.
 2. **Events in a tag** — `/events/keyset?tag_slug=…`. A strip under the title lists the
    tag's sub-tags (`…/related-tags/tags`); `t` picks one, which pushes another
    Events screen scoped to that sub-tag, so the breadcrumb reads
@@ -258,8 +291,11 @@ Follows grid where the meaning carries over.
 
 - Root `Model` owns size, a screen stack (`tags`, `browse`, `detail`; `browse` is one
   type parameterised by scope — a tag, a sub-tag or an event), the active overlay and the
-  status bar; it routes `tea.WindowSizeMsg` to everything and key messages to the overlay
-  if one is open, else to the top screen.
+  status bar; it routes key messages to the overlay if one is open, else to the top
+  screen, and sizes a screen when it comes into view. The result of a request goes to
+  every screen on the stack, since the Tags level goes on loading under a lower one; each
+  recognises its own by message type and generation. A screen answers a message with a
+  command and a `nav` (push this screen, or pop), which only the top one may use.
 - All I/O happens in `tea.Cmd`s returning typed messages (`pageMsg`, `bookMsg`,
   `historyMsg`, `tradesMsg`, `exportProgressMsg`, `errMsg`). `Update` never blocks.
 - Each request carries a generation number; a response whose generation is stale (the
@@ -269,7 +305,11 @@ Follows grid where the meaning carries over.
   green/red with a `+`/`-` sign so colour is never the only signal. `NO_COLOR` is honoured
   by Lip Gloss.
 - Minimum size 80×24; narrower terminals drop columns right-to-left (Liquidity, Volume,
-  24h Δ) and never truncate the price.
+  24h Δ) and never truncate the price. Below the minimum the frame is clipped, bottom
+  and right first, and never wraps.
+- Colours are the terminal's own sixteen plus bold, faint and reverse, rather than Lip
+  Gloss's light/dark pairs: they follow the terminal's theme without asking it for its
+  background colour.
 
 ## 6. Export
 
@@ -371,12 +411,15 @@ the TUI's search in milestone 5, which has to settle what it does to the other f
 
 ```
 polymarket                       open the TUI on the Tags level
-polymarket --tag politics        start inside a tag (same flags as export); esc goes up to Tags
+polymarket --tag politics        start inside a tag (same flags as export); esc goes up to Tags (milestone 5)
 polymarket export <dataset> …    headless export (§6)
 polymarket --version | completion <shell> | man     from fang
 ```
 
-Global flags: `--debug FILE` (charm log to a file; not there yet, it comes with the TUI),
+Without a terminal on both stdin and stdout the root command is an error that points at
+`polymarket export`, rather than a frame drawn into a pipe.
+
+Global flags: `--debug FILE` (charm log to a file; not there yet),
 `--timeout`, and hidden `--gamma-url`/`--clob-url`/`--data-url` overrides for tests. `version` is stamped by
 `-ldflags` into `internal/cli.version`, exactly as grid does. No config file in v1.
 
@@ -427,9 +470,11 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   recorded fixtures change with every recording and are only checked for shape; quoting,
   formula guard, empty values, >2 outcomes, cancel leaves no file, stdout mode.
 - `internal/ui`: drive `Update` with messages directly and assert on model state and
-  `View()` substrings, as grid's `ui_test.go` does; tag aggregation from a fixture page;
-  drill down and back up restoring the cursor; stale-generation responses dropped;
-  paging trigger; resize down to 80×24.
+  `View()` substrings, as grid's `ui_test.go` does, over a `Client` that answers at once
+  so a test can run every command a key sets off (`settle`) or one round at a time
+  (`step`); tag aggregation from a fixture page; drill down and back up restoring the
+  cursor; stale-generation responses dropped; paging trigger; resize down to 80×24 and
+  below.
 - `internal/cli`: flag parsing to filter state; completion for dataset and `--order`; the
   export commands end to end against an `httptest` stand-in for Gamma.
 - `make smoke` (build tag `live`): one request per endpoint, asserting only shape, to catch
@@ -455,7 +500,8 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   region is blocked the app reports the HTTP status and body rather than retrying.
 - **Tag ranking is a sample**: counts and volumes on the Tags level cover the top 500
   open events, not all of them, and a niche tag may be missing until typed by name. 500
-  is a constant to tune in milestone 4 against start-up time (5 requests, in parallel).
+  stays: the five requests cannot run in parallel (§4), but they take 1.5 s between them
+  and the list is usable after the first.
   Tags are flat on the API side; the only hierarchy is the related-tags relation, which
   is why sub-tags are a narrowing step rather than a fifth fixed level.
 - **Search is weaker than the listings** (checked in milestone 2, see §4): the Markets

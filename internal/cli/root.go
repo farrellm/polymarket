@@ -3,14 +3,17 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"os"
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 
 	"github.com/farrellm/polymarket/internal/api"
+	"github.com/farrellm/polymarket/internal/ui"
 )
 
 // version is overridden at build time with -ldflags.
@@ -59,8 +62,7 @@ func newCommand(o *options) *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// There is no browser yet, so there is nothing to open.
-			return cmd.Help()
+			return runBrowser(cmd, o)
 		},
 	}
 
@@ -77,6 +79,31 @@ func newCommand(o *options) *cobra.Command {
 
 	cmd.AddCommand(newExportCommand(o))
 	return cmd
+}
+
+// runBrowser opens the browser on the Tags level and runs it until the user
+// leaves.
+func runBrowser(cmd *cobra.Command, o *options) error {
+	in, out := cmd.InOrStdin(), cmd.OutOrStdout()
+	if !isTerminalStream(in) || !isTerminalStream(out) {
+		// Drawing into a pipe helps nobody, and neither does waiting for
+		// keys from one.
+		return errors.New("the browser needs a terminal; polymarket export writes CSV without one")
+	}
+
+	// The context is cancelled by a signal from outside; ctrl+c at the
+	// keyboard is a key like any other, which the browser quits on.
+	p := tea.NewProgram(ui.New(o.client()),
+		tea.WithContext(cmd.Context()), tea.WithInput(in), tea.WithOutput(out))
+	_, err := p.Run()
+	return err
+}
+
+// isTerminalStream reports whether one of a command's streams is a terminal.
+// A stream a test has swapped for a buffer is not.
+func isTerminalStream(stream any) bool {
+	f, ok := stream.(*os.File)
+	return ok && isTerminal(f)
 }
 
 // registerFlagCompletion offers a fixed set of values for a flag. It panics on

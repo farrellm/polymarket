@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold) and 2 (`internal/api`) implemented; the rest is design. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`) and 3 (`internal/export`, `polymarket export markets|events|outcomes`) implemented; the rest is design. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders on 2026-10-02.
 
 ## 1. Summary
 
@@ -44,6 +44,8 @@ Mirrors grid: thin `main.go`, everything under `internal/`.
 ```
 main.go                     calls cli.Execute(ctx); exit 1 on error
 internal/cli/               root command (TUI), `export` subcommand, flags, version var
+    root.go                 root command, global flags, the API client they describe
+    export.go               `export <dataset>`: flags -> filter -> listing -> export
 internal/api/               HTTP client for the three services
     client.go               base URLs, http.Client, limiter, retry, decode, User-Agent
     gamma.go                events, markets, tags, search
@@ -63,7 +65,7 @@ internal/ui/                Bubble Tea models
     filter.go               huh filter form
     exportdlg.go            huh export dialog + progress
     keys.go help.go style.go spark.go
-testdata/                   recorded API responses, golden CSVs
+testdata/                   recorded API responses; golden/ holds the golden CSVs
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
 ```
 
@@ -121,6 +123,17 @@ does not appear there is still reachable by typing its name (`/tags/slug/{slug}`
   `flexFloat` type accepts either.
 - Keyset endpoints reject `offset` with 422; paging is `after_cursor` only, and the end
   is an empty or absent `next_cursor`.
+- With no `order`, the keyset listings come back by ID, oldest first, so every caller
+  sets one. An unknown `order` is a 422 ("order fields are not valid"). Both listings
+  take `volume24hr`, `volume1wk`, `volume1mo`, `endDate` and `startDate`; total volume and
+  liquidity are `volume`/`liquidity` on events but must be `volumeNum`/`liquidityNum` on
+  markets, where `order=volume` compares the string field as text (9999.9 before 83460060).
+- `/events/keyset` answers an unknown `tag_slug` with an empty page, not an error, so a
+  tag typed by hand is checked with `/tags/slug/{slug}` first. `/markets/keyset` has no
+  `tag_slug` at all and needs that lookup anyway for the `tag_id`.
+- polymarket.com serves a market at `/event/<event slug>/<market slug>`;
+  `/market/<market slug>` redirects there, which is what a market known without its
+  event links to.
 - A market **inside an event** has no `volume*` members at all if it has never traded,
   and `outcomePrices: null` if it has not opened yet; `/markets/{id}` reports the same
   market with `"volume": "0"`. `api.Float` therefore records whether a value was sent, so
@@ -293,9 +306,33 @@ polymarket export history --market <slug|id> --interval 1w -o -
 polymarket export trades  --market <slug|id> --since 2026-09-01 -o trades.csv
 ```
 
-`-o -` writes to stdout, so `polymarket export markets | grid` works. Progress goes to
-stderr and only when it is a terminal. Flags map one-to-one onto the TUI's filter state,
-and both paths call the same `export.Run(ctx, dataset, w, progress)`.
+Each dataset is a subcommand of `export`, so it has its own flags and completes like any
+other command. The list datasets (`markets`, `events`, `outcomes`) share one set:
+
+| Flag | Meaning |
+|---|---|
+| `--tag SLUG` | only what is filed under the tag; an unknown slug is an error |
+| `--closed`, `--all` | closed ones, or both, instead of open ones (mutually exclusive) |
+| `--order FIELD`, `--desc` | `volume24hr`, `volume1wk`, `volume1mo`, `volume`, `liquidity`, `endDate`, `startDate`; ascending unless `--desc`. Without `--order` the sort is `volume24hr`, largest first |
+| `--min-volume`, `--min-liquidity` | floors |
+| `--ends-after`, `--ends-before` | a date (`2026-11-03`, midnight UTC) or an RFC 3339 timestamp |
+| `--limit N` | at most N rows; the default headless is all of them |
+| `-o FILE` | the file to write; the default, `-`, is stdout |
+| `--raw` | no formula guard |
+
+Stdout is the default output, so `polymarket export markets | grid` works. Writing there
+prints nothing else at all: stderr is usually the terminal the reader of the pipe is
+drawing on. Writing a file reports a summary line on stderr (rows written, whether the
+limit cut it short, the dataset's notes), preceded by a running row count when stderr is a
+terminal. An interrupt cancels the context, so the temporary file is removed.
+
+Flags map one-to-one onto the TUI's filter state, and both paths call the same
+`export.Run(ctx, dataset, w, options)`, or `export.File` for the temp-file-and-rename
+around it. `Options` carries the row limit, `Raw` and the progress callback; the result is
+a `Summary{Rows, Capped, Notes}`. A `Dataset` is built from an iterator of pages
+(`export.Markets(pages)`), which is `api.Pages(…)` for "all matching" and
+`export.Loaded(rows)` for the rows on screen. There is no `--search` yet: it arrives with
+the TUI's search in milestone 5, which has to settle what it does to the other filters.
 
 ### CSV format
 
@@ -311,9 +348,20 @@ and both paths call the same `export.Run(ctx, dataset, w, progress)`.
   spread, change_1h, change_1d, change_1w, volume, volume_24h, volume_1w, volume_1m,
   liquidity, tags, url`. `tags` is `|`-joined. A market with more than two outcomes is
   exported in full only by `outcomes`; `markets` writes the first two and the summary line
-  reports how many were affected.
+  reports how many were affected. `tags` holds slugs, which cannot contain the separator,
+  and is filled in because the listing is asked with `include_tag=true`.
+- `events` columns: `id, slug, title, active, closed, neg_risk, start_date, end_date,
+  markets, volume, volume_24h, volume_1w, volume_1m, liquidity, open_interest,
+  comment_count, tags, url`. `markets` is the number of markets in the event.
+- `outcomes` columns: `market_id, market_slug, question, event_id, event_slug,
+  event_title, condition_id, active, closed, end_date, outcome_index, outcome, price,
+  token_id`. `outcome_index` counts from 0, as the Data API's trades do.
+- Every column has a kind (text, number, bool, time). The client parses numbers on the
+  way in (`api.Float`), so they are written back in their shortest round-tripping form
+  rather than byte for byte.
 - Text cells beginning with `=`, `+`, `-` or `@` are prefixed with `'` so a spreadsheet
-  does not evaluate them; `--raw` turns that off. Numeric columns are never touched.
+  does not evaluate them; `--raw` turns that off. Only columns of the text kind are
+  touched, so a negative number stays a number.
 - Written to `<path>.tmp` in the destination directory and renamed on success, so a
   cancelled or failed export leaves no partial file.
 - "All matching" has a safety cap (`--limit`, default 10 000 rows in the TUI, with the
@@ -328,8 +376,8 @@ polymarket export <dataset> …    headless export (§6)
 polymarket --version | completion <shell> | man     from fang
 ```
 
-Global flags: `--debug FILE` (charm log to a file), `--timeout`, and hidden
-`--gamma-url`/`--clob-url`/`--data-url` overrides for tests. `version` is stamped by
+Global flags: `--debug FILE` (charm log to a file; not there yet, it comes with the TUI),
+`--timeout`, and hidden `--gamma-url`/`--clob-url`/`--data-url` overrides for tests. `version` is stamped by
 `-ldflags` into `internal/cli.version`, exactly as grid does. No config file in v1.
 
 ## 8. Tooling (taken from `../grid`)
@@ -374,13 +422,16 @@ so stray exports are not committed (`!testdata/**/*.csv`).
 - `internal/api`: `httptest.Server` serving recorded responses from `testdata/`; cases for
   the string-encoded arrays, string-or-number floats, cursor paging to exhaustion, 429 with
   `Retry-After`, 5xx retry, context cancellation, and the 422 error path.
-- `internal/export`: golden CSV per dataset from the same fixtures; quoting, formula
-  guard, empty values, >2 outcomes, cancel leaves no file, stdout mode.
+- `internal/export`: golden CSV per dataset (`testdata/golden/`, rewritten with
+  `go test ./internal/export -update`) from JSON written into the test, since the
+  recorded fixtures change with every recording and are only checked for shape; quoting,
+  formula guard, empty values, >2 outcomes, cancel leaves no file, stdout mode.
 - `internal/ui`: drive `Update` with messages directly and assert on model state and
   `View()` substrings, as grid's `ui_test.go` does; tag aggregation from a fixture page;
   drill down and back up restoring the cursor; stale-generation responses dropped;
   paging trigger; resize down to 80×24.
-- `internal/cli`: flag parsing to filter state; completion for dataset and `--order`.
+- `internal/cli`: flag parsing to filter state; completion for dataset and `--order`; the
+  export commands end to end against an `httptest` stand-in for Gamma.
 - `make smoke` (build tag `live`): one request per endpoint, asserting only shape, to catch
   API drift. Run by hand, not in CI.
 

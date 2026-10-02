@@ -1,0 +1,3 @@
+id,slug,title,active,closed,neg_risk,start_date,end_date,markets,volume,volume_24h,volume_1w,volume_1m,liquidity,open_interest,comment_count,tags,url
+45915,the-2026-election,The 2026 Election,true,false,true,2025-09-18T20:07:57Z,2026-10-05T03:59:00Z,2,161489102.917339,2564548.1361579993,6503485.280204999,19379023.63874301,23047892.85716,8589543.173147,21741,politics|elections,https://polymarket.com/event/the-2026-election
+16044,,"'-1.5 goals, home side",false,false,false,,,0,,,,,,,0,,

@@ -22,6 +22,7 @@ per milestone (§10). Update its status line and record anything the live API co
 
 - Fixture tests assert shape, not values: a re-recording holds different events.
   Put exact-value cases in inline JSON instead.
+- `go test ./internal/export -update` rewrites the golden CSVs in `testdata/golden/`; read the diff before committing it.
 - `newTestClient` in `internal/api/api_test.go` points a client at `httptest` with the
   limiter off and the retry pauses recorded rather than slept.
 
@@ -29,3 +30,4 @@ per milestone (§10). Update its status line and record anything the live API co
 
 - Probe the live API with `curl` before trusting an endpoint shape; §4 of `DESIGN.md` lists the quirks found so far.
 - A market inside an event may have no volume or prices at all: check `api.Float.Valid`, never assume zero means zero.
+- Sort fields differ per listing: markets need `volumeNum`/`liquidityNum` (`order=volume` sorts as text). Go through `sortOrders` in `internal/cli/export.go`.

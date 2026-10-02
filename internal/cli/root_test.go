@@ -7,7 +7,7 @@ import (
 )
 
 func TestRootPrintsHelp(t *testing.T) {
-	cmd := newCommand()
+	cmd := newCommand(&options{})
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
@@ -21,7 +21,7 @@ func TestRootPrintsHelp(t *testing.T) {
 }
 
 func TestRootTakesNoArguments(t *testing.T) {
-	cmd := newCommand()
+	cmd := newCommand(&options{})
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)

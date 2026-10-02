@@ -167,9 +167,9 @@ type tagMsg struct {
 // tags is the top level: one row per tag, ranked over a sample of the
 // busiest open events.
 type tags struct {
-	client Client
-	keys   keyMap
-	st     styles
+	env
+	// filter is what a level opened from here starts out narrowed by.
+	filter api.Filter
 
 	list  list
 	input textinput.Model
@@ -209,27 +209,30 @@ type tags struct {
 	flash      string
 }
 
-func newTags(client Client, keys keyMap, st styles) *tags {
+func newTags(e env, filter api.Filter) *tags {
+	t := &tags{
+		env:    e,
+		filter: filter,
+		input:  newPrompt("/"),
+		// Nothing is shown before the first load, so it is as good as begun.
+		loading: true,
+	}
+	t.list = newList(e.st, t.columns())
+	t.refresh()
+	return t
+}
+
+// newPrompt is a one-line prompt for the status bar.
+func newPrompt(prompt string) textinput.Model {
 	in := textinput.New()
-	in.Prompt = "/"
+	in.Prompt = prompt
 	in.CharLimit = 64
 	// A steady cursor: a blinking one is a timer that redraws the screen for
 	// as long as the prompt is open.
 	inputStyles := in.Styles()
 	inputStyles.Cursor.Blink = false
 	in.SetStyles(inputStyles)
-
-	t := &tags{
-		client: client,
-		keys:   keys,
-		st:     st,
-		input:  in,
-		// Nothing is shown before the first load, so it is as good as begun.
-		loading: true,
-	}
-	t.list = newList(st, t.columns())
-	t.refresh()
-	return t
+	return in
 }
 
 func (t *tags) init() tea.Cmd { return t.reload() }
@@ -279,6 +282,8 @@ func (t *tags) resize(width, height int) {
 func (t *tags) view() string { return t.list.view() }
 
 func (t *tags) crumb() string { return "Tags" }
+
+func (t *tags) tabs() string { return "" }
 
 func (t *tags) note() string {
 	if len(t.events) == 0 {
@@ -584,7 +589,7 @@ func (t *tags) open() nav {
 	// A lookup still under way has been overtaken.
 	t.lookups++
 	t.looking = ""
-	return nav{push: newBrowse(t.keys, t.st, row.tag, eventsUnder(t.events, row.tag.ID), len(t.events))}
+	return nav{push: newBrowse(t.env, row.tag, t.filter, eventsUnder(t.events, row.tag.ID))}
 }
 
 // lookUp asks the service for a tag by its slug.
@@ -616,7 +621,7 @@ func (t *tags) found(msg tagMsg) nav {
 	case msg.err != nil:
 		t.flash = "could not look up " + strconv.Quote(msg.slug) + ": " + msg.err.Error()
 	default:
-		return nav{push: newBrowse(t.keys, t.st, *msg.tag, eventsUnder(t.events, msg.tag.ID), len(t.events))}
+		return nav{push: newBrowse(t.env, *msg.tag, t.filter, eventsUnder(t.events, msg.tag.ID))}
 	}
 	return nav{}
 }

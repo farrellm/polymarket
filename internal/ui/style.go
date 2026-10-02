@@ -25,6 +25,9 @@ type styles struct {
 	hint     lipgloss.Style
 	failure  lipgloss.Style
 	faint    lipgloss.Style
+	tab      lipgloss.Style // the tab on show
+	up       lipgloss.Style // a price that rose
+	down     lipgloss.Style // a price that fell
 }
 
 func newStyles() styles {
@@ -40,6 +43,9 @@ func newStyles() styles {
 		hint:     lipgloss.NewStyle().Faint(true),
 		failure:  lipgloss.NewStyle().Foreground(lipgloss.Red),
 		faint:    lipgloss.NewStyle().Faint(true),
+		tab:      lipgloss.NewStyle().Bold(true),
+		up:       lipgloss.NewStyle().Foreground(lipgloss.Green),
+		down:     lipgloss.NewStyle().Foreground(lipgloss.Red),
 	}
 }
 

@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`) and 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level) implemented; the rest is design. Opening a tag shows only its share of the sampled events until milestone 5 puts the real listing there. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor and the tag lookup on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level) and 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) implemented; the rest is design. `enter` on a market does nothing yet but say so, and an event with one market opens a list of one, until milestone 6 adds the detail. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup and the search on 2026-10-02.
 
 ## 1. Summary
 
@@ -27,7 +27,7 @@ Same baseline as grid (`go 1.26.6` in go.mod; fang + cobra entry point; Bubble T
 | `charm.land/bubbletea/v2` | v2.0.10 | program loop, messages, commands |
 | `charm.land/bubbles/v2` | v2.2.1 | `textinput`, `viewport`, `spinner`, `progress`, `help`, `key` |
 | `charm.land/lipgloss/v2` | v2.0.6 | layout, borders, colour, tabs |
-| `charm.land/huh/v2` | v2.0.3 | the export dialog and filter form |
+| `charm.land/huh/v2` | v2.0.3 | the export dialog (milestone 7; not yet a dependency) |
 | `charm.land/log/v2` | v2.0.1 | `--debug` log file (never the screen) |
 | `github.com/charmbracelet/fang` + `spf13/cobra` | v1.0.0 / v1.10.2 | CLI, help, completion, `--version` |
 | `golang.org/x/time/rate` | latest | client-side rate limiter |
@@ -44,6 +44,13 @@ does; it cannot right-align a column of numbers; and its highlight stops at the 
 column instead of the edge. The list also owns the dropping of columns in a narrow
 window (§5).
 
+The filter form is hand-rolled as well (`ui/filter.go`, a choice and four `textinput`s),
+where huh was the plan. A huh `Input` wraps a `textinput` whose cursor blink it gives no
+way to turn off, which is a timer redrawing the screen for as long as the form is open,
+and a huh form moves between its fields with messages of its own that the program has
+to route back to it. Neither fits a screen driven by `Update` alone, in the tests or
+otherwise. The export dialog of milestone 7 has the same choice to make.
+
 ## 3. Layout of the repository
 
 Mirrors grid: thin `main.go`, everything under `internal/`.
@@ -59,20 +66,24 @@ internal/api/               HTTP client for the three services
     clob.go                 order book
     data.go                 price history, trades
     types.go                Event, Market, Outcome, Tag, Book, PricePoint, Trade
+    filter.go               Filter and SortOrders: what a listing is narrowed and sorted
+                            by, for the browser and the export flags alike
     pager.go                generic cursor iterator
 internal/export/            datasets -> CSV (no UI imports)
     dataset.go              Dataset interface, column schemas
     csv.go                  writer: temp file + atomic rename, or stdout
-internal/format/            money ($1.2M); to come: price (66.5¢), deltas, relative dates
+internal/format/            money ($1.2M), price (66.5¢), deltas (+3.5¢), relative dates (2y)
 internal/ui/                Bubble Tea models
     model.go                root model: screen stack, size, frame, breadcrumb, status bar, routing
     list.go                 the table every level is drawn as: columns, cursor, scrolling
     tags.go                 top level: the sample, aggregation, ranked tag list, find
-    browse.go               Events / Markets lists, scoped to a tag
-    detail.go               one market: summary, book, sparkline, trades
-    filter.go               huh filter form
-    exportdlg.go            huh export dialog + progress
-    keys.go help.go style.go spark.go
+    browse.go               Events / Markets lists of a tag, and the markets of an event
+    filter.go               the filter form
+    picker.go               the sub-tag picker
+    help.go                 the help, built from the key map
+    keys.go style.go
+    detail.go spark.go      to come: one market (summary, book, sparkline, trades)
+    exportdlg.go            to come: export dialog + progress
 testdata/                   recorded API responses; golden/ holds the golden CSVs
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
 ```
@@ -94,13 +105,13 @@ All endpoints are public and unauthenticated. Three services:
 
 | Call | Notes |
 |---|---|
-| `GET /events/keyset` | `limit` (max 100), `order`, `ascending`, `after_cursor`, `closed`, `tag_id`/`tag_slug`, `title_search`, `volume_min`, `liquidity_min`, `end_date_min/max`. Returns `{events, next_cursor}`; each event embeds its `markets` and `tags`. |
+| `GET /events/keyset` | `limit` (max 100), `order`, `ascending`, `after_cursor`, `closed`, `tag_id`/`tag_slug`, `title_search`, `volume_min`, `liquidity_min`, `end_date_min/max`. Returns `{events, next_cursor}`; each event embeds its `markets` and `tags`. The browser asks by `tag_id`, the exports by `tag_slug`. |
 | `GET /markets/keyset` | Same paging; `closed`, `tag_id`, `volume_num_min`, `liquidity_num_min`, `end_date_min/max`, `include_tag`. Returns `{markets, next_cursor}`. No text-search parameter. |
 | `GET /events/{id}`, `GET /markets/{id}` | refresh one item |
 | `GET /tags/slug/{slug}` | resolve a tag typed by name (`--tag`, or a tag outside the ranked set) |
 | `GET /tags/slug/{slug}/related-tags/tags` | `status=active`, `omit_empty=true`; ranked sub-tags of a tag (politics → Trump, Midterms, Senate Elections, …) |
 | `GET /tags` | plain array of `{id,label,slug}`, `limit` ≤ 100 with `offset`. **Not used for the tag level** — see below |
-| `GET /public-search?q=` | `limit_per_type`, `page`, `events_status` (`active` or `resolved`), `events_tag`; returns `{events, pagination:{hasMore,totalResults}}`, with no `events` member at all when nothing matches |
+| `GET /public-search?q=` | `limit_per_type` (silently at most 50), `page` (from 1), `events_status` (`active` or `resolved`), `events_tag` (a slug; an ID matches nothing); returns `{events, pagination:{hasMore,totalResults}}`, with no `events` member at all when nothing matches |
 | `GET clob/book?token_id=` | `bids`, `asks` (`{price,size}` strings), `tick_size`, `min_order_size`, `last_trade_price`, `timestamp` |
 | `GET data/v2/prices-history?token_id=` | `interval` = `1h`/`6h`/`1d`/`1w`/`1m`/`max`, or `start`/`end` epoch seconds (a range of at most 15 days, else 400); `bucket_seconds`; `limit` ≤ 10000, `cursor`. Returns `{data:[{timestamp,price,resolution_seconds}], pagination}` |
 | `GET data/v2/trades?condition=` | `limit` ≤ 1000, `cursor`, `start`, `end`, `side`. Returns `{data:[…], pagination:{has_more,next_cursor}}` |
@@ -173,7 +184,9 @@ of those.
 - On the Data API the end of a listing is `has_more: false`, not a missing cursor.
 - `/public-search` honours fewer filters than the listings: a status and a tag, but no
   volume, liquidity or end-date bounds, and it ranks by relevance whatever `sort` is
-  given. An unknown `events_status` is ignored rather than refused.
+  given. An unknown `events_status` is ignored rather than refused. The status is the
+  event's: an open event is returned with its closed markets too (about a third of the
+  markets in a page for "trump"), so the markets are filtered again on arrival.
 - Token IDs are 77-digit decimals: keep them as strings everywhere, including CSV.
 - Identifiers differ per service: Gamma `id`/`slug`, CLOB `token_id` (per outcome), Data
   API `condition` (= `conditionId`, per market).
@@ -215,13 +228,13 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
 │ 143 tags                          / find tag  s sort  r refresh  e export  h help    │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 
-┌ polymarket ─ Tags ▸ Politics ─ [Events] Markets ──────────── open · sort: vol 24h ↓ ┐
+┌ polymarket ─ Tags ▸ Politics ─ [Events] Markets ────────────────── vol 24h ↓ · open ┐
 │ Sub-tags: Trump · Midterms · Senate Elections · House Elections · Primaries · …      │
 │ Event                                       Markets   Vol 24h    Volume   Liq  Ends  │
 │▸Democratic Presidential Nominee 2028             34    $1.1M     $412M  $9.8M  2y    │
 │ …                                                                                    │
 ├──────────────────────────────────────────────────────────────────────────────────────┤
-│ 100 loaded · more available   / search  f filter  t sub-tag  s sort  e export  h help│
+│ 100 loaded · more available          / search  f filter  t sub-tag  s sort  h help   │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -233,21 +246,31 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
    set after `enter` and on the way back up, until `esc` clears it. `s` cycles the sort
    (24 h volume, events, liquidity, name) and `S` reverses it; both sort the sample in
    hand, with no request, and leave the cursor on its tag.
-2. **Events in a tag** — `/events/keyset?tag_slug=…`. A strip under the title lists the
+2. **Events in a tag** — `/events/keyset?tag_id=…`. A strip under the title lists the
    tag's sub-tags (`…/related-tags/tags`); `t` picks one, which pushes another
    Events screen scoped to that sub-tag, so the breadcrumb reads
    `Tags ▸ Politics ▸ Midterms`. A `Markets` tab on the same screen switches to the flat
    market list for the tag (`/markets/keyset?tag_id=…`), skipping the event level for
-   anyone who wants every market in a tag in one table.
+   anyone who wants every market in a tag in one table. Each tab keeps its own rows and
+   cursor, and the Markets tab is only fetched once it is shown. The rows the Tags
+   level holds for the tag stand in until the first page arrives, provided the filter is
+   the default one: the sample is of the busiest open events and of nothing else.
 3. **Markets in an event** — the event's markets arrive embedded in the event, so this
-   level needs no request. Single-market events skip straight to detail.
+   level needs no request: it sorts, filters and searches the markets in hand, under
+   their short names (`groupItemTitle`), and `r` fetches the event again
+   (`/events/{id}`). A market with no figure for the field sorted by goes last either
+   way round. Single-market events skip straight to detail (milestone 6; until then
+   they open a list of one).
 4. **Market detail** — summary header (question, state, end date, volumes), then panes:
    outcomes with bid/ask/last/spread; order book depth (top N levels each side); price
    sparkline with `1d/1w/1m/max` cycling; recent trades. The description sits in a
    `viewport`. Each pane loads independently and shows its own spinner or error.
 
 **Overlays** — help (generated from the key map, as in grid), filter form, sub-tag
-picker, export dialog.
+picker, export dialog. Each takes the place of the list inside the frame rather than
+floating over it. The title bar's note leads with the sort and follows it with the
+search and the filter; too long for the bar, it loses its end, then goes altogether
+before the breadcrumb is cut.
 
 ### Keys
 
@@ -259,10 +282,10 @@ Follows grid where the meaning carries over.
 | `enter` / `esc` | down a level / back up |
 | `T` | jump back to the Tags level from anywhere |
 | `tab` | switch Events / Markets within a tag |
-| `/` | Tags: narrow by name. Events/Markets: search (server-side) |
+| `/` | Tags: narrow by name. Events/Markets: search (server-side, on `enter`) |
 | `f` | filter form: open/closed/all, min volume, min liquidity, ends before/after |
 | `t` | sub-tag picker for the current tag (type to narrow) |
-| `s` / `S` | cycle sort column / flip direction |
+| `s` / `S` | cycle the sort (24 h, week, month and total volume, liquidity, end, start) / flip direction |
 | `r` | refresh |
 | `e` | export |
 | `o` | open the market on polymarket.com |
@@ -274,16 +297,23 @@ Follows grid where the meaning carries over.
 
 - **Paging**: first page of 100 on entry; the next page is requested when the cursor
   comes within one screen of the last loaded row. The status bar shows
-  "N loaded · more available" or "N loaded · end".
+  "N loaded · more available" or "N loaded · end". A page that fails leaves the cursor
+  to go on from, so moving towards the end asks for it again; `r` starts over.
 - **Sorting and filtering are server-side** (`order`/`ascending` and the filter
   parameters), so they apply to the whole result set rather than the loaded rows.
   Changing either resets the list and its cursor.
 - **Search**: inside a tag, the Events tab searches with `title_search` on
   `/events/keyset`, which keeps the tag filter and the sort. `/markets/keyset` has no text
   parameter, so the Markets tab searches via `/public-search` (`events_tag=`) and shows
-  the returned events' markets flattened. `esc` clears the search and restores the list.
-- **Filters persist down the stack**: open/closed and the volume/liquidity floors set at
-  one level apply to the levels below it, and are shown in the title bar.
+  the returned events' markets flattened. That search honours none of the filter but the
+  status, so the rest is applied to each page as it arrives (`api.Filter.Keeps`): a
+  page may add no rows, and the paging goes on until the screen is full or the search
+  runs out. It cannot be sorted: the note reads "by relevance" and `s`/`S` say why
+  instead of acting. `esc` clears the search and restores the list.
+- **Filters persist down the stack**: the filter and the sort set at one level are what
+  a level opened from it starts with (an event, a sub-tag), and are shown in the title
+  bar. A change made further down stays there: going back up finds the level as it was
+  left. The search does not go down with them: it was a search of that list.
 - **Errors** never tear down the screen: a failed load shows a one-line message in the
   status bar with `r` to retry, and the rows already loaded stay.
 
@@ -292,9 +322,12 @@ Follows grid where the meaning carries over.
 - Root `Model` owns size, a screen stack (`tags`, `browse`, `detail`; `browse` is one
   type parameterised by scope — a tag, a sub-tag or an event), the active overlay and the
   status bar; it routes key messages to the overlay if one is open, else to the top
-  screen, and sizes a screen when it comes into view. The result of a request goes to
+  screen, and sizes a screen when it comes into view. In practice only the help is
+  the root's: the search prompt, the filter form and the picker belong to the screen
+  that opened them, which reports `typing` so that letters reach it. The result of a request goes to
   every screen on the stack, since the Tags level goes on loading under a lower one; each
-  recognises its own by message type and generation. A screen answers a message with a
+  recognises its own by message type, owner (two levels of the same kind may be
+  stacked, a sub-tag under its tag) and generation. A screen answers a message with a
   command and a `nav` (push this screen, or pop), which only the top one may use.
 - All I/O happens in `tea.Cmd`s returning typed messages (`pageMsg`, `bookMsg`,
   `historyMsg`, `tradesMsg`, `exportProgressMsg`, `errMsg`). `Update` never blocks.
@@ -304,8 +337,8 @@ Follows grid where the meaning carries over.
 - Styles live in one `style.go` built from Lip Gloss adaptive colours; price changes are
   green/red with a `+`/`-` sign so colour is never the only signal. `NO_COLOR` is honoured
   by Lip Gloss.
-- Minimum size 80×24; narrower terminals drop columns right-to-left (Liquidity, Volume,
-  24h Δ) and never truncate the price. Below the minimum the frame is clipped, bottom
+- Minimum size 80×24; narrower terminals drop columns right-to-left (Ends, Liquidity,
+  Volume, 24 h volume, 24h Δ) and never truncate the price. Below the minimum the frame is clipped, bottom
   and right first, and never wraps.
 - Colours are the terminal's own sixteen plus bold, faint and reverse, rather than Lip
   Gloss's light/dark pairs: they follow the terminal's theme without asking it for its
@@ -352,6 +385,7 @@ other command. The list datasets (`markets`, `events`, `outcomes`) share one set
 | Flag | Meaning |
 |---|---|
 | `--tag SLUG` | only what is filed under the tag; an unknown slug is an error |
+| `--search TEXT` | events whose title contains the text; for `markets` and `outcomes`, the markets of the events a search finds |
 | `--closed`, `--all` | closed ones, or both, instead of open ones (mutually exclusive) |
 | `--order FIELD`, `--desc` | `volume24hr`, `volume1wk`, `volume1mo`, `volume`, `liquidity`, `endDate`, `startDate`; ascending unless `--desc`. Without `--order` the sort is `volume24hr`, largest first |
 | `--min-volume`, `--min-liquidity` | floors |
@@ -371,8 +405,14 @@ Flags map one-to-one onto the TUI's filter state, and both paths call the same
 around it. `Options` carries the row limit, `Raw` and the progress callback; the result is
 a `Summary{Rows, Capped, Notes}`. A `Dataset` is built from an iterator of pages
 (`export.Markets(pages)`), which is `api.Pages(…)` for "all matching" and
-`export.Loaded(rows)` for the rows on screen. There is no `--search` yet: it arrives with
-the TUI's search in milestone 5, which has to settle what it does to the other filters.
+`export.Loaded(rows)` for the rows on screen.
+
+`--search` does what `/` does in the browser. On `events` it is one more parameter of the
+listing, and everything else still applies. On `markets` and `outcomes` it goes through
+`/public-search` (`api.SearchMarkets`, paged by page number through the same
+`api.Pages`): the status and the tag go to the service, the floors and dates are applied
+to what comes back, and the order is the search's own, so `--order` with it is refused
+rather than quietly dropped.
 
 ### CSV format
 
@@ -411,10 +451,16 @@ the TUI's search in milestone 5, which has to settle what it does to the other f
 
 ```
 polymarket                       open the TUI on the Tags level
-polymarket --tag politics        start inside a tag (same flags as export); esc goes up to Tags (milestone 5)
+polymarket --tag politics        start inside a tag; esc goes up to Tags
 polymarket export <dataset> …    headless export (§6)
 polymarket --version | completion <shell> | man     from fang
 ```
+
+The root command takes the export's flags that select and sort (`--tag`, `--closed`,
+`--all`, `--order`, `--desc`, `--min-volume`, `--min-liquidity`, `--ends-after`,
+`--ends-before`): they are the filter every list starts with, and with `--tag` the
+browser opens inside that tag, which is looked up first so that a misspelt one is an
+error rather than an empty screen. `--search` is not among them.
 
 Without a terminal on both stdin and stdout the root command is an error that points at
 `polymarket export`, rather than a frame drawn into a pipe.
@@ -505,9 +551,9 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   Tags are flat on the API side; the only hierarchy is the related-tags relation, which
   is why sub-tags are a narrowing step rather than a fifth fixed level.
 - **Search is weaker than the listings** (checked in milestone 2, see §4): the Markets
-  tab's search cannot apply the volume, liquidity and end-date filters or the sort, so
-  milestone 5 has to either apply them client-side to the returned page or say in the
-  title bar that they are suspended while searching. The 15-day cap on `start`/`end`
+  tab's search cannot apply the volume, liquidity and end-date filters or the sort.
+  Settled in milestone 5: the filters are applied client-side to each page, and the
+  sort is suspended and said to be (§5, Search). The 15-day cap on `start`/`end`
   price-history ranges is real, so the sparkline and `export history` use `interval`.
 - **To decide in review**: binary name (`polymarket` vs something shorter such as `pm`);
   whether live auto-refresh (`--refresh 30s`) belongs in v1.

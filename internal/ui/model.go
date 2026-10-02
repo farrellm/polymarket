@@ -9,6 +9,7 @@ package ui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
@@ -20,7 +21,30 @@ import (
 // the real one; the tests stand in a recorded one.
 type Client interface {
 	Events(ctx context.Context, q api.EventsQuery) (events []api.Event, next string, err error)
+	Markets(ctx context.Context, q api.MarketsQuery) (markets []api.Market, next string, err error)
+	Event(ctx context.Context, id string) (*api.Event, error)
 	Tag(ctx context.Context, slug string) (*api.Tag, error)
+	RelatedTags(ctx context.Context, slug string) ([]api.Tag, error)
+	Search(ctx context.Context, q api.SearchQuery) (*api.SearchResult, error)
+}
+
+// Options are what the browser is opened on.
+type Options struct {
+	// Tag, if set, is the tag to start inside, with the Tags level above it.
+	Tag *api.Tag
+	// Filter is what the lists under the Tags level start out narrowed and
+	// sorted by. The zero value stands for api.DefaultFilter.
+	Filter api.Filter
+	// Now is the clock the end dates are measured against; nil is time.Now.
+	Now func() time.Time
+}
+
+// env is what every screen is built with.
+type env struct {
+	client Client
+	keys   keyMap
+	st     styles
+	now    func() time.Time
 }
 
 // screen is one level of the browser.
@@ -38,6 +62,9 @@ type screen interface {
 
 	// crumb is the screen's part of the breadcrumb.
 	crumb() string
+	// tabs are the views the screen switches between, the one on show
+	// marked, or empty for a screen with only the one.
+	tabs() string
 	// note goes at the right of the title bar: what the rows are a list of.
 	note() string
 	status() status
@@ -76,10 +103,13 @@ type Model struct {
 	// stack is the levels drilled down through, the Tags level first. The
 	// last one is on show; the others keep their state for the way back up.
 	stack []screen
+	// help is true while the keys are listed over the screen.
+	help bool
 }
 
-// New creates the browser, opened on the Tags level.
-func New(client Client) *Model {
+// New creates the browser, opened on the Tags level, or inside the tag the
+// options name.
+func New(client Client, o Options) *Model {
 	m := &Model{
 		keys: defaultKeyMap(),
 		st:   newStyles(),
@@ -87,12 +117,30 @@ func New(client Client) *Model {
 		width:  80,
 		height: 24,
 	}
-	m.stack = []screen{newTags(client, m.keys, m.st)}
+	e := env{client: client, keys: m.keys, st: m.st, now: o.Now}
+	if e.now == nil {
+		e.now = time.Now
+	}
+	filter := o.Filter
+	if filter.Order.Name == "" {
+		filter.Order = api.DefaultFilter().Order
+	}
+	m.stack = []screen{newTags(e, filter)}
+	if o.Tag != nil {
+		// The sample has not arrived, so there are no rows to start with.
+		m.stack = append(m.stack, newBrowse(e, *o.Tag, filter, nil))
+	}
 	m.layout()
 	return m
 }
 
-func (m *Model) Init() tea.Cmd { return m.stack[0].init() }
+func (m *Model) Init() tea.Cmd {
+	cmds := make([]tea.Cmd, len(m.stack))
+	for i, s := range m.stack {
+		cmds[i] = s.init()
+	}
+	return tea.Batch(cmds...)
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -106,8 +154,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, m.keys.Interrupt):
 			return m, m.quit()
+		case m.help:
+			// Any key puts the screen back.
+			m.help = false
+			return m, nil
 		case top.typing():
 			// Everything else is the prompt's to read.
+		case key.Matches(msg, m.keys.Help):
+			m.help = true
+			return m, nil
 		case key.Matches(msg, m.keys.Quit):
 			return m, m.quit()
 		case key.Matches(msg, m.keys.Tags):
@@ -198,7 +253,11 @@ func (m *Model) View() tea.View {
 	edge := m.st.border.Render("│")
 	lines := make([]string, 0, m.bodyHeight()+frameLines)
 	lines = append(lines, m.titleBar())
-	body := strings.Split(m.top().view(), "\n")
+	content := m.top().view()
+	if m.help {
+		content = helpView(m.keys, m.st, inner)
+	}
+	body := strings.Split(content, "\n")
 	for i := range m.bodyHeight() {
 		line := ""
 		if i < len(body) {
@@ -237,15 +296,20 @@ func (m *Model) titleBar() string {
 	}
 	head := m.st.border.Render("┌") + " " + m.st.app.Render("polymarket") + " " +
 		m.st.border.Render("─") + " " + strings.Join(crumbs, crumbSeparator) + " "
+	if tabs := m.top().tabs(); tabs != "" {
+		head += m.st.border.Render("─") + " " + tabs + " "
+	}
 	corner := m.st.border.Render("┐")
 
+	// The note gives way first, losing its end and then going altogether;
+	// after it, the end of the breadcrumb.
+	const leastNote = 8
 	tail := corner
 	if note := m.top().note(); note != "" {
-		tail = " " + m.st.note.Render(note) + " " + corner
-	}
-	// The note gives way first, then the end of the breadcrumb.
-	if width(head)+width(tail) >= m.width {
-		tail = corner
+		// A rule's width is kept between the two, so they do not run together.
+		if room := m.width - width(head) - width(corner) - 3; room >= min(leastNote, width(note)) {
+			tail = " " + m.st.note.Render(elide(note, room)) + " " + corner
+		}
 	}
 	head = clip(head, m.width-width(tail))
 	return head + m.rule(m.width-width(head)-width(tail)) + tail
@@ -255,6 +319,10 @@ func (m *Model) titleBar() string {
 // the keys on the right.
 func (m *Model) statusBar(w int) string {
 	s := m.top().status()
+	hints := m.top().hints()
+	if m.help {
+		s, hints = status{text: "the keys"}, []key.Binding{m.keys.closeHelp()}
+	}
 	left := s.text
 	if s.failure != "" {
 		if left != "" {
@@ -266,7 +334,6 @@ func (m *Model) statusBar(w int) string {
 
 	// The hints give way to the status, the last of them first.
 	const gap = 2
-	hints := m.top().hints()
 	right := ""
 	for ; len(hints) > 0; hints = hints[:len(hints)-1] {
 		right = m.hintLine(hints) + " "

@@ -39,7 +39,7 @@ func TestListFlagsToFilter(t *testing.T) {
 		{
 			name: "closed",
 			args: []string{"--closed"},
-			want: func(f *filter) { f.status = api.StatusClosed },
+			want: func(f *filter) { f.Status = api.StatusClosed },
 		},
 		{
 			name: "closed=false is the default spelt out",
@@ -49,20 +49,24 @@ func TestListFlagsToFilter(t *testing.T) {
 		{
 			name: "all",
 			args: []string{"--all"},
-			want: func(f *filter) { f.status = api.StatusAll },
+			want: func(f *filter) { f.Status = api.StatusAll },
 		},
 		{
 			name: "an order is ascending unless told otherwise",
 			args: []string{"--order", "endDate"},
 			want: func(f *filter) {
-				f.order = sortOrders[5]
-				f.ascending = true
+				f.Order = api.SortOrders[5]
+				f.Ascending = true
+				f.ordered = true
 			},
 		},
 		{
 			name: "order with desc",
 			args: []string{"--order", "liquidity", "--desc"},
-			want: func(f *filter) { f.order = sortOrders[4] },
+			want: func(f *filter) {
+				f.Order = api.SortOrders[4]
+				f.ordered = true
+			},
 		},
 		{
 			name: "desc alone keeps the default order",
@@ -73,16 +77,21 @@ func TestListFlagsToFilter(t *testing.T) {
 			name: "floors",
 			args: []string{"--min-volume", "10000", "--min-liquidity", "2.5"},
 			want: func(f *filter) {
-				f.volumeMin = 10000
-				f.liquidityMin = 2.5
+				f.VolumeMin = 10000
+				f.LiquidityMin = 2.5
 			},
+		},
+		{
+			name: "search, trimmed",
+			args: []string{"--search", " fed rate "},
+			want: func(f *filter) { f.search = "fed rate" },
 		},
 		{
 			name: "end dates as a day and as a timestamp",
 			args: []string{"--ends-after", "2026-11-03", "--ends-before", "2026-11-04T01:30:00+01:00"},
 			want: func(f *filter) {
-				f.endDateMin = day
-				f.endDateMax = day.Add(24*time.Hour + 30*time.Minute)
+				f.EndDateMin = day
+				f.EndDateMax = day.Add(24*time.Hour + 30*time.Minute)
 			},
 		},
 	}
@@ -104,7 +113,7 @@ func TestListFlagsToFilter(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := filter{order: sortOrders[0]}
+			want := filter{Filter: api.DefaultFilter()}
 			tt.want(&want)
 			if got != want {
 				t.Errorf("filter = %+v\nwant     %+v", got, want)
@@ -146,10 +155,10 @@ func TestOrderFieldsPerEndpoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := f.eventsQuery().Order; got != tt.events {
+		if got := f.EventsQuery().Order; got != tt.events {
 			t.Errorf("--order %s sorts events by %q, want %q", tt.order, got, tt.events)
 		}
-		if got := f.marketsQuery().Order; got != tt.markets {
+		if got := f.MarketsQuery().Order; got != tt.markets {
 			t.Errorf("--order %s sorts markets by %q, want %q", tt.order, got, tt.markets)
 		}
 	}
@@ -275,6 +284,14 @@ func newService(t *testing.T) *service {
 				return
 			}
 			w.Write([]byte(`{"markets": [` + marketOne + `], "next_cursor": "page2"}`))
+		case "/gamma/public-search":
+			// One page of one event, and a second that claims there is more
+			// but holds nothing.
+			if r.URL.Query().Get("page") != "1" {
+				w.Write([]byte(`{"pagination": {"hasMore": true, "totalResults": 1}}`))
+				return
+			}
+			w.Write([]byte(`{"events": [` + eventOne + `], "pagination": {"hasMore": true, "totalResults": 1}}`))
 		case "/gamma/events/keyset":
 			if second {
 				w.Write([]byte(`{"events": []}`))
@@ -396,6 +413,65 @@ func TestExportEvents(t *testing.T) {
 	}
 }
 
+// A search of events is the listing with one more parameter: the tag, the
+// sort and the bounds all still apply.
+func TestExportEventsWithSearch(t *testing.T) {
+	s := newService(t)
+	_, _, err := s.run(t, "export", "events", "--search", "fed rate", "--tag", "politics", "--order", "volume", "--desc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantParams(t, s.asked("/gamma/events/keyset")[0], map[string]string{
+		"title_search": "fed rate",
+		"tag_slug":     "politics",
+		"order":        "volume",
+	})
+	if n := len(s.asked("/gamma/public-search")); n != 0 {
+		t.Errorf("%d searches made, want the listing to do the searching", n)
+	}
+}
+
+// The markets listing has no text search, so a search of markets is a search
+// of events, flattened, with the filter applied to what comes back.
+func TestExportMarketsWithSearch(t *testing.T) {
+	s := newService(t)
+	stdout, _, err := s.run(t, "export", "markets", "--search", "fed", "--tag", "politics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := readCSV(t, stdout)
+	if len(records) != 3 || records[1][0] != "1" || records[2][0] != "2" {
+		t.Fatalf("records = %q, want the header and the event's two markets", records)
+	}
+	// Each market is given the event it was found in.
+	header := records[0]
+	if at := slices.Index(header, "event_slug"); records[1][at] != "ev" {
+		t.Errorf("event_slug = %q, want ev", records[1][at])
+	}
+
+	pages := s.asked("/gamma/public-search")
+	if len(pages) != 2 {
+		t.Fatalf("%d searches, want 2: the second page is empty, which ends it", len(pages))
+	}
+	wantParams(t, pages[0], map[string]string{
+		"q": "fed", "events_tag": "politics", "events_status": "active", "limit_per_type": "50", "page": "1",
+	})
+	wantParams(t, pages[1], map[string]string{"page": "2"})
+	if n := len(s.asked("/gamma/markets/keyset")); n != 0 {
+		t.Errorf("%d listing requests, want none while searching", n)
+	}
+
+	// The search knows nothing of the floors, so they are applied here: the
+	// second market has no volume at all.
+	stdout, _, err = s.run(t, "export", "markets", "--search", "fed", "--min-volume", "1000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records := readCSV(t, stdout); len(records) != 2 || records[1][0] != "1" {
+		t.Errorf("records = %q, want only the market with the volume", records)
+	}
+}
+
 func TestExportOutcomesWithLimit(t *testing.T) {
 	s := newService(t)
 	stdout, _, err := s.run(t, "export", "outcomes", "--limit", "3")
@@ -475,12 +551,23 @@ func TestExportRejectsBadUsage(t *testing.T) {
 		{"export", "markets", "stray"},
 		{"export", "markets", "--closed", "--all"},
 		{"export", "markets", "--order", "bogus"},
+		// A search of markets cannot be sorted, and says so rather than
+		// writing them in another order than the one asked for.
+		{"export", "markets", "--search", "fed", "--order", "volume"},
+		{"export", "outcomes", "--search", "fed", "--order", "volume"},
+		// The browser takes the same filter flags, and checks them before it
+		// looks for a terminal.
+		{"--order", "bogus"},
+		{"--closed", "--all"},
+		{"--ends-after", "soon"},
 	} {
 		if _, _, err := s.run(t, args...); err == nil {
 			t.Errorf("%v was accepted, want an error", args)
 		}
 	}
-	if n := len(s.asked("/gamma/markets/keyset")); n != 0 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := len(s.requests); n != 0 {
 		t.Errorf("%d requests made for commands that should not have run", n)
 	}
 }

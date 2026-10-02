@@ -166,6 +166,31 @@ func TestLive(t *testing.T) {
 		}
 	})
 
+	// What the browser's search of markets rests on: a page is cut to
+	// SearchPageSize, and the events it finds carry their markets.
+	t.Run("search of markets", func(t *testing.T) {
+		res, err := c.Search(ctx, SearchQuery{Text: "election", Limit: 2 * SearchPageSize})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Events) != SearchPageSize || !res.More {
+			t.Errorf("%d events, more %v; want a full page of %d and more to come", len(res.Events), res.More, SearchPageSize)
+		}
+		markets, next, err := SearchMarkets(ctx, c, DefaultFilter(), "election", "politics", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(markets) == 0 || next != "2" {
+			t.Fatalf("%d markets, next page %q; want some, and page 2", len(markets), next)
+		}
+		for i := range markets {
+			m := &markets[i]
+			if m.Closed || len(m.Events) != 1 || m.Events[0].Slug == "" || m.Question == "" {
+				t.Errorf("market %s: closed %v, events %+v", m.ID, m.Closed, m.Events)
+			}
+		}
+	})
+
 	t.Run("book", func(t *testing.T) {
 		b, err := c.Book(ctx, tokenID)
 		if err != nil {

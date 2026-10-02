@@ -20,46 +20,27 @@ import (
 // pageSize is the most the listing endpoints hand out per request.
 const pageSize = 100
 
-// sortOrder is a field a listing can be sorted by. The two listings do not
-// always call it the same thing.
-type sortOrder struct {
-	name, desc string
-	// events and markets are the field's names on the two endpoints.
-	events, markets string
-}
-
-// sortOrders are the values --order takes, all checked against the live
-// service. On /markets/keyset, order=volume compares the volume as text, so
-// the numeric fields are asked for instead.
-var sortOrders = []sortOrder{
-	{"volume24hr", "volume over the last 24 hours", "volume24hr", "volume24hr"},
-	{"volume1wk", "volume over the last week", "volume1wk", "volume1wk"},
-	{"volume1mo", "volume over the last month", "volume1mo", "volume1mo"},
-	{"volume", "volume since the start", "volume", "volumeNum"},
-	{"liquidity", "liquidity", "liquidity", "liquidityNum"},
-	{"endDate", "end date", "endDate", "endDate"},
-	{"startDate", "start date", "startDate", "startDate"},
-}
-
 // defaultOrder is what a listing is sorted by when --order is not given,
 // largest first. The service's own default is by ID, oldest first, which
 // makes a poor sample of anything cut short by --limit.
 const defaultOrder = "volume24hr"
 
-func findOrder(name string) (sortOrder, error) {
-	names := make([]string, len(sortOrders))
-	for i, o := range sortOrders {
-		if o.name == name {
-			return o, nil
-		}
-		names[i] = o.name
+func findOrder(name string) (api.SortOrder, error) {
+	if o, ok := api.FindOrder(name); ok {
+		return o, nil
 	}
-	return sortOrder{}, fmt.Errorf("unknown --order %q: it is one of %s", name, strings.Join(names, ", "))
+	names := make([]string, len(api.SortOrders))
+	for i, o := range api.SortOrders {
+		names[i] = o.Name
+	}
+	return api.SortOrder{}, fmt.Errorf("unknown --order %q: it is one of %s", name, strings.Join(names, ", "))
 }
 
-// listFlags are the flags of the list datasets, as typed.
+// listFlags are the flags of the list datasets, as typed. The root command
+// takes the ones that select and sort, to open the browser on.
 type listFlags struct {
 	tag          string
+	search       string
 	closed       bool
 	all          bool
 	order        string
@@ -75,46 +56,47 @@ type listFlags struct {
 
 // filter is what a listing is narrowed and sorted by: the flags, checked.
 type filter struct {
-	tagSlug      string
-	status       api.Status
-	order        sortOrder
-	ascending    bool
-	volumeMin    float64
-	liquidityMin float64
-	endDateMin   time.Time
-	endDateMax   time.Time
+	tagSlug string
+	search  string
+	// ordered is true when --order was given, rather than defaulted.
+	ordered bool
+	api.Filter
 }
 
 func (lf *listFlags) filter() (filter, error) {
 	f := filter{
-		tagSlug:      lf.tag,
-		volumeMin:    lf.minVolume,
-		liquidityMin: lf.minLiquidity,
+		tagSlug: lf.tag,
+		search:  strings.TrimSpace(lf.search),
+		ordered: lf.order != "",
+		Filter: api.Filter{
+			VolumeMin:    lf.minVolume,
+			LiquidityMin: lf.minLiquidity,
+		},
 	}
 	switch {
 	case lf.all:
-		f.status = api.StatusAll
+		f.Status = api.StatusAll
 	case lf.closed:
-		f.status = api.StatusClosed
+		f.Status = api.StatusClosed
 	default:
-		f.status = api.StatusOpen
+		f.Status = api.StatusOpen
 	}
 
 	name := lf.order
 	if name == "" {
 		name = defaultOrder
 	} else {
-		f.ascending = !lf.desc
+		f.Ascending = !lf.desc
 	}
 	var err error
-	if f.order, err = findOrder(name); err != nil {
+	if f.Order, err = findOrder(name); err != nil {
 		return filter{}, err
 	}
 
-	if f.endDateMin, err = parseDate("--ends-after", lf.endsAfter); err != nil {
+	if f.EndDateMin, err = parseDate("--ends-after", lf.endsAfter); err != nil {
 		return filter{}, err
 	}
-	if f.endDateMax, err = parseDate("--ends-before", lf.endsBefore); err != nil {
+	if f.EndDateMax, err = parseDate("--ends-before", lf.endsBefore); err != nil {
 		return filter{}, err
 	}
 	if lf.minVolume < 0 || lf.minLiquidity < 0 {
@@ -126,45 +108,13 @@ func (lf *listFlags) filter() (filter, error) {
 	return f, nil
 }
 
-// parseDate reads a day, taken as its first moment in UTC, or a full RFC 3339
-// timestamp. Empty is no bound.
+// parseDate reads the date a flag was given; empty is no bound.
 func parseDate(flag, s string) (time.Time, error) {
-	if s == "" {
-		return time.Time{}, nil
+	t, err := api.ParseDate(s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s %q is %w", flag, s, err)
 	}
-	for _, layout := range []string{time.DateOnly, time.RFC3339} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t.UTC(), nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("%s %q is neither a date (2026-11-03) nor a timestamp (2026-11-03T12:00:00Z)", flag, s)
-}
-
-func (f filter) eventsQuery() api.EventsQuery {
-	return api.EventsQuery{
-		Order:        f.order.events,
-		Ascending:    f.ascending,
-		Status:       f.status,
-		TagSlug:      f.tagSlug,
-		VolumeMin:    f.volumeMin,
-		LiquidityMin: f.liquidityMin,
-		EndDateMin:   f.endDateMin,
-		EndDateMax:   f.endDateMax,
-	}
-}
-
-// marketsQuery leaves the tag out: the markets listing takes a tag's ID, not
-// its slug, which costs a request to find.
-func (f filter) marketsQuery() api.MarketsQuery {
-	return api.MarketsQuery{
-		Order:        f.order.markets,
-		Ascending:    f.ascending,
-		Status:       f.status,
-		VolumeMin:    f.volumeMin,
-		LiquidityMin: f.liquidityMin,
-		EndDateMin:   f.endDateMin,
-		EndDateMax:   f.endDateMax,
-	}
+	return t, nil
 }
 
 // findTag looks up the tag the filter names, if it names one. A misspelt slug
@@ -186,8 +136,10 @@ func eventPages(ctx context.Context, c *api.Client, f filter, limit int) (iter.S
 	if _, err := findTag(ctx, c, f); err != nil {
 		return nil, err
 	}
-	q := f.eventsQuery()
+	q := f.EventsQuery()
 	q.Limit = limit
+	q.TagSlug = f.tagSlug
+	q.TitleSearch = f.search
 	return api.Pages(ctx, func(cursor string) ([]api.Event, string, error) {
 		q.Cursor = cursor
 		return c.Events(ctx, q)
@@ -196,12 +148,26 @@ func eventPages(ctx context.Context, c *api.Client, f filter, limit int) (iter.S
 
 // marketPages pages through the markets the filter selects, each with its
 // tags.
+//
+// The markets listing has no text search, so --search goes through the
+// search of events instead and takes their markets. That search ranks by
+// relevance and knows nothing of the floors and dates, which are applied to
+// what it returns; a sort order it cannot honour is refused rather than
+// dropped.
 func marketPages(ctx context.Context, c *api.Client, f filter, limit int) (iter.Seq2[[]api.Market, error], error) {
 	tag, err := findTag(ctx, c, f)
 	if err != nil {
 		return nil, err
 	}
-	q := f.marketsQuery()
+	if f.search != "" {
+		if f.ordered {
+			return nil, errors.New("--order does not apply to a --search of markets, which is ranked by relevance")
+		}
+		return api.Pages(ctx, func(cursor string) ([]api.Market, string, error) {
+			return api.SearchMarkets(ctx, c, f.Filter, f.search, f.tagSlug, cursor)
+		}), nil
+	}
+	q := f.MarketsQuery()
 	q.Limit = limit
 	q.IncludeTags = true
 	q.TagID = tag.ID
@@ -294,6 +260,17 @@ func newListCommand(o *options, d listDataset) *cobra.Command {
 // bindListFlags gives cmd the flags the list datasets share, parsed into lf.
 func bindListFlags(cmd *cobra.Command, lf *listFlags) {
 	f := cmd.Flags()
+	bindFilterFlags(cmd, lf)
+	f.StringVar(&lf.search, "search", "", "only what matches this text: an event by its title, a market by its event")
+	f.IntVar(&lf.limit, "limit", 0, "write at most this many rows (default: all of them)")
+	f.StringVarP(&lf.output, "output", "o", "-", "write to this file; - is standard output")
+	f.BoolVar(&lf.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets")
+}
+
+// bindFilterFlags gives cmd the flags that select and sort a listing, which
+// the browser takes as well as the exports.
+func bindFilterFlags(cmd *cobra.Command, lf *listFlags) {
+	f := cmd.Flags()
 	f.StringVar(&lf.tag, "tag", "", "only what is filed under the tag with this slug, such as politics")
 	f.BoolVar(&lf.closed, "closed", false, "closed ones instead of open ones")
 	f.BoolVar(&lf.all, "all", false, "open and closed ones alike")
@@ -303,14 +280,11 @@ func bindListFlags(cmd *cobra.Command, lf *listFlags) {
 	f.Float64Var(&lf.minLiquidity, "min-liquidity", 0, "only with at least this much liquidity")
 	f.StringVar(&lf.endsAfter, "ends-after", "", "only ending on or after this date")
 	f.StringVar(&lf.endsBefore, "ends-before", "", "only ending on or before this date")
-	f.IntVar(&lf.limit, "limit", 0, "write at most this many rows (default: all of them)")
-	f.StringVarP(&lf.output, "output", "o", "-", "write to this file; - is standard output")
-	f.BoolVar(&lf.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets")
 	cmd.MarkFlagsMutuallyExclusive("closed", "all")
 
-	choices := make([]string, len(sortOrders))
-	for i, s := range sortOrders {
-		choices[i] = cobra.CompletionWithDesc(s.name, s.desc)
+	choices := make([]string, len(api.SortOrders))
+	for i, s := range api.SortOrders {
+		choices[i] = cobra.CompletionWithDesc(s.Name, s.Desc)
 	}
 	registerFlagCompletion(cmd, "order", choices)
 }

@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // column is one column of a list.
@@ -166,7 +167,8 @@ func (l *list) view() string {
 	for i := l.top; i < min(l.top+l.pageSize(), len(l.rows)); i++ {
 		b.WriteByte('\n')
 		if i == l.cursor {
-			b.WriteString(l.st.selected.Render(l.line(cols, l.rows[i], cursorMarker)))
+			// A cell's own colour would end the highlight where the cell does.
+			b.WriteString(l.st.selected.Render(ansi.Strip(l.line(cols, l.rows[i], cursorMarker))))
 		} else {
 			b.WriteString(l.line(cols, l.rows[i], " "))
 		}

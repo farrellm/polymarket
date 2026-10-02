@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -23,18 +25,38 @@ type fakePage struct {
 	next   string
 }
 
+// fakeMarkets is what the stand-in markets listing answers one cursor with.
+type fakeMarkets struct {
+	markets []api.Market
+	next    string
+}
+
 // fakeClient stands in for the service. Its answers are immediate, so a test
 // can run every command a keystroke sets off and look at the result.
 type fakeClient struct {
-	// pages are keyed by the cursor that asks for them; the first is "".
+	// pages are keyed by the cursor that asks for them; the first is "". A
+	// page is narrowed to the tag and the title the query asks for, as the
+	// service would.
 	pages map[string]fakePage
+	// marketPages are keyed the same way, and handed out as they are.
+	marketPages map[string]fakeMarkets
 	// tags are keyed by slug. Any other slug is not found.
 	tags map[string]api.Tag
-	// fail, when set, is what the listing answers with instead.
+	// related are a tag's sub-tags, keyed by its slug.
+	related map[string][]api.Tag
+	// found are the pages of a search, the first being 1.
+	found map[int]api.SearchResult
+	// event is what a refresh of an event answers, keyed by ID.
+	event map[string]api.Event
+	// fail, when set, is what the listings answer with instead.
 	fail error
 
-	queries []api.EventsQuery
-	slugs   []string
+	queries       []api.EventsQuery
+	marketQueries []api.MarketsQuery
+	searches      []api.SearchQuery
+	slugs         []string
+	relatedSlugs  []string
+	eventIDs      []string
 	// done holds the Done channel of each request's context.
 	done []<-chan struct{}
 }
@@ -46,7 +68,37 @@ func (c *fakeClient) Events(ctx context.Context, q api.EventsQuery) ([]api.Event
 		return nil, "", c.fail
 	}
 	p := c.pages[q.Cursor]
-	return p.events, p.next, nil
+	var events []api.Event
+	for _, e := range p.events {
+		under := q.TagID == "" || slices.ContainsFunc(e.Tags, func(t api.Tag) bool { return t.ID == q.TagID })
+		if under && strings.Contains(strings.ToLower(e.Title), strings.ToLower(q.TitleSearch)) {
+			events = append(events, e)
+		}
+	}
+	return events, p.next, nil
+}
+
+func (c *fakeClient) Markets(ctx context.Context, q api.MarketsQuery) ([]api.Market, string, error) {
+	c.marketQueries = append(c.marketQueries, q)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, "", c.fail
+	}
+	p := c.marketPages[q.Cursor]
+	return p.markets, p.next, nil
+}
+
+func (c *fakeClient) Event(ctx context.Context, id string) (*api.Event, error) {
+	c.eventIDs = append(c.eventIDs, id)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, c.fail
+	}
+	e, ok := c.event[id]
+	if !ok {
+		return nil, &api.Error{Status: http.StatusNotFound, Body: `{"error":"id not found"}`}
+	}
+	return &e, nil
 }
 
 func (c *fakeClient) Tag(ctx context.Context, slug string) (*api.Tag, error) {
@@ -57,6 +109,33 @@ func (c *fakeClient) Tag(ctx context.Context, slug string) (*api.Tag, error) {
 		return nil, &api.Error{Status: http.StatusNotFound, Body: `{"error":"slug not found"}`}
 	}
 	return &tag, nil
+}
+
+func (c *fakeClient) RelatedTags(ctx context.Context, slug string) ([]api.Tag, error) {
+	c.relatedSlugs = append(c.relatedSlugs, slug)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, c.fail
+	}
+	return c.related[slug], nil
+}
+
+func (c *fakeClient) Search(ctx context.Context, q api.SearchQuery) (*api.SearchResult, error) {
+	c.searches = append(c.searches, q)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, c.fail
+	}
+	res := c.found[max(q.Page, 1)]
+	return &res, nil
+}
+
+// testNow is the moment the tests' end dates are measured against.
+var testNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+
+// newModel starts a browser over the client with the clock stopped.
+func newModel(c Client) *Model {
+	return New(c, Options{Now: func() time.Time { return testNow }})
 }
 
 func tag(label string) api.Tag {
@@ -173,6 +252,14 @@ func keyMsg(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyPgDown}
 	case "backspace":
 		return tea.KeyPressMsg{Code: tea.KeyBackspace}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
 	case "ctrl+c":
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	}
@@ -197,7 +284,7 @@ func typeText(m *Model, s string) {
 // open starts a browser over the client and lets the sample load.
 func open(t *testing.T, c Client) *Model {
 	t.Helper()
-	m := New(c)
+	m := newModel(c)
 	settle(m, m.Init())
 	return m
 }
@@ -222,11 +309,20 @@ func cursorLine(t *testing.T, m *Model) string {
 	return ""
 }
 
+// headerLine is the line the list's header is on: the first under the title
+// bar, or the second where a strip of sub-tags comes between.
+func headerLine(m *Model) int {
+	if strings.Contains(lines(m)[1], "Sub-tags:") {
+		return 2
+	}
+	return 1
+}
+
 // rowLabels are the first cell of each row on screen, header aside.
 func rowLabels(m *Model) []string {
 	all := lines(m)
 	var out []string
-	for _, l := range all[2 : len(all)-3] {
+	for _, l := range all[headerLine(m)+1 : len(all)-3] {
 		l = strings.TrimLeft(strings.Trim(l, "│"), cursorMarker+" ")
 		if label, _, _ := strings.Cut(l, "  "); label != "" {
 			out = append(out, label)
@@ -429,7 +525,7 @@ func TestSampleEndsWithTheListing(t *testing.T) {
 }
 
 func TestRowsAppearAsPagesArrive(t *testing.T) {
-	m := New(manyPages(3))
+	m := newModel(manyPages(3))
 	wantContains(t, "the empty list", screenText(m), "loading the top 500 open events")
 
 	cmd := step(m, m.Init())
@@ -630,8 +726,12 @@ func TestUnmatchedFindIsLookedUpBySlug(t *testing.T) {
 		t.Errorf("looked up %q, want nba-finals", c.slugs)
 	}
 	wantContains(t, "title bar", lines(m)[0], "Tags ▸ NBA Finals")
-	wantContains(t, "the empty list", screenText(m), "none of the top 4 open events is filed under NBA Finals")
-	wantContains(t, "status bar", statusLine(m), "0 of the top 4 open events")
+	// The tag is asked for by the ID the lookup gave it.
+	if q := c.queries[len(c.queries)-1]; q.TagID != "id-nba-finals" {
+		t.Errorf("listing asked for tag %q, want id-nba-finals", q.TagID)
+	}
+	wantContains(t, "the empty list", screenText(m), "no events match: open")
+	wantContains(t, "status bar", statusLine(m), "0 loaded · end")
 }
 
 func TestLookupOfAnUnknownSlug(t *testing.T) {
@@ -684,12 +784,12 @@ func TestDrillDownAndBackRestoresTheCursor(t *testing.T) {
 
 	press(m, "down", "down", "enter") // Politics
 	got := lines(m)
-	wantContains(t, "title bar", got[0], "Tags ▸ Politics", "Events")
-	wantContains(t, "header", got[1], "Event", "Markets", "Vol 24h", "Volume", "Liquidity")
-	// The tag's share of the sample, in the sample's order.
+	wantContains(t, "title bar", got[0], "Tags ▸ Politics", "[Events] Markets", "vol 24h ↓ · open")
+	wantContains(t, "strip", got[1], "Sub-tags: none")
+	wantContains(t, "header", got[2], "Event", "Markets", "Vol 24h", "Volume", "Liq", "Ends")
 	wantLabels(t, m, "Election", "Fed decision")
-	wantContains(t, "first row", got[2], cursorMarker+"Election", "2", "$100", "–", "$1.0K")
-	wantContains(t, "status bar", statusLine(m), "2 of the top 4 open events", "esc back", "T tags", "q quit")
+	wantContains(t, "first row", got[3], cursorMarker+"Election", "2", "$100", "–", "$1.0K")
+	wantContains(t, "status bar", statusLine(m), "2 loaded · end", "/ search", "f filter", "s sort", "h help")
 
 	press(m, "down", "esc")
 	wantContains(t, "title bar", lines(m)[0], "Tags")
@@ -698,18 +798,19 @@ func TestDrillDownAndBackRestoresTheCursor(t *testing.T) {
 		t.Errorf("stack is %d deep after esc, want 1", len(m.stack))
 	}
 
-	// All opens every event.
+	// All opens every event, and has no sub-tags to show.
 	press(m, "g", "enter")
 	wantContains(t, "title bar", lines(m)[0], "Tags ▸ All")
+	wantContains(t, "header", lines(m)[1], "Event")
 	wantLabels(t, m, "Election", "Fed decision", "Final", "Derby")
 }
 
 func TestTagsKeyJumpsToTheTop(t *testing.T) {
-	m := open(t, onePage(sampleEvents()...))
-	press(m, "down", "enter")
-	// A second level under the first, as a sub-tag will be.
-	m.navigate(nav{push: newBrowse(m.keys, m.st, tag("Deeper"), nil, 4)})
-	wantContains(t, "title bar", lines(m)[0], "Tags ▸ Sports ▸ Deeper")
+	c := onePage(sampleEvents()...)
+	c.related = map[string][]api.Tag{"sports": {tag("Soccer")}}
+	m := open(t, c)
+	press(m, "down", "enter", "t", "enter")
+	wantContains(t, "title bar", lines(m)[0], "Tags ▸ Sports ▸ Soccer")
 
 	press(m, "T")
 	if len(m.stack) != 1 {
@@ -778,7 +879,12 @@ func TestViewFitsTheWindow(t *testing.T) {
 		{200, 60}, {80, 24}, {60, 20}, {40, 12}, {30, 8}, {12, 5}, {3, 3}, {1, 1}, {0, 0},
 	}
 	for _, size := range sizes {
-		m := open(t, onePage(append(sampleEvents(), long)...))
+		c := onePage(append(sampleEvents(), long)...)
+		c.related = map[string][]api.Tag{"日本語のタグ": {tag(strings.Repeat("A long sub-tag ", 9)), tag("Short")}}
+		c.marketPages = map[string]fakeMarkets{"": {markets: []api.Market{
+			market("m1", strings.Repeat("A very long question? ", 8), "", 0.999, 0.25, 9e9),
+		}}}
+		m := open(t, c)
 		check := func(what string) {
 			t.Helper()
 			got := lines(m)
@@ -799,6 +905,21 @@ func TestViewFitsTheWindow(t *testing.T) {
 		check("find")
 		press(m, "esc", "G", "enter")
 		check("events")
+		press(m, "tab")
+		check("markets")
+		press(m, "f", "tab")
+		typeText(m, "an amount that is nothing of the kind, and is long")
+		press(m, "enter")
+		check("filter form")
+		press(m, "esc", "/")
+		typeText(m, "a search for something with a long name")
+		check("search")
+		press(m, "enter", "tab", "h")
+		check("help")
+		press(m, "h", "t")
+		check("sub-tags")
+		press(m, "esc", "g", "enter")
+		check("an event's markets")
 	}
 }
 
@@ -844,7 +965,7 @@ func TestNarrowWindowDropsColumnsFromTheRight(t *testing.T) {
 
 func TestQuitStopsTheRequests(t *testing.T) {
 	c := manyPages(3)
-	m := New(c)
+	m := newModel(c)
 	cmd := step(m, m.Init()) // one page in, the next asked for
 
 	_, quit := m.Update(keyMsg("q"))
@@ -868,7 +989,7 @@ func TestQuitStopsTheRequests(t *testing.T) {
 
 func TestRefreshAbandonsTheLoadUnderWay(t *testing.T) {
 	c := manyPages(3)
-	m := New(c)
+	m := newModel(c)
 	stale := m.Init()
 
 	_, fresh := m.Update(keyMsg("r"))

@@ -2,7 +2,10 @@
 // for a column, and precise enough to compare rows by eye.
 package format
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
 
 // moneyUnits are the suffixes Money scales by, smallest first.
 var moneyUnits = []struct {
@@ -41,4 +44,53 @@ func Money(v float64) string {
 		decimals = 1
 	}
 	return sign + "$" + strconv.FormatFloat(scaled, 'f', decimals, 64) + moneyUnits[u].suffix
+}
+
+// Price renders a price between 0 and 1 in cents, to the tenth of a cent the
+// finest tick allows: 66.5¢, 7.0¢, 0.3¢.
+func Price(p float64) string {
+	return strconv.FormatFloat(p*100, 'f', 1, 64) + "¢"
+}
+
+// Delta renders a change in price in cents, always with its sign, so that the
+// direction does not rest on colour alone: +3.5¢, -1.0¢. No change at all is
+// 0.0¢.
+func Delta(d float64) string {
+	s := strconv.FormatFloat(d*100, 'f', 1, 64)
+	switch {
+	case s == "0.0" || s == "-0.0":
+		return "0.0¢"
+	case d > 0:
+		return "+" + s + "¢"
+	}
+	return s + "¢"
+}
+
+// spans are the units Until counts in, largest first.
+var spans = []struct {
+	length time.Duration
+	suffix string
+}{
+	{365 * 24 * time.Hour, "y"},
+	{30 * 24 * time.Hour, "mo"},
+	{24 * time.Hour, "d"},
+	{time.Hour, "h"},
+	{time.Minute, "m"},
+}
+
+// Until renders how far off t is from now in the largest unit that fits,
+// rounded down: 2y, 3mo, 12d, 5h, 40m. A moment gone by reads the same with a
+// minus sign, and one less than a minute either way is "now".
+func Until(t, now time.Time) string {
+	d := t.Sub(now)
+	sign := ""
+	if d < 0 {
+		sign, d = "-", -d
+	}
+	for _, s := range spans {
+		if d >= s.length {
+			return sign + strconv.FormatInt(int64(d/s.length), 10) + s.suffix
+		}
+	}
+	return "now"
 }

@@ -1,6 +1,9 @@
 package format
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestMoney(t *testing.T) {
 	cases := []struct {
@@ -34,6 +37,52 @@ func TestMoney(t *testing.T) {
 	for _, c := range cases {
 		if got := Money(c.in); got != c.want {
 			t.Errorf("Money(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestPrice(t *testing.T) {
+	for in, want := range map[float64]string{
+		0: "0.0¢", 0.003: "0.3¢", 0.07: "7.0¢", 0.665: "66.5¢", 0.9995: "100.0¢", 1: "100.0¢",
+	} {
+		if got := Price(in); got != want {
+			t.Errorf("Price(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDelta(t *testing.T) {
+	for in, want := range map[float64]string{
+		0.035: "+3.5¢", -0.01: "-1.0¢", 0.5: "+50.0¢",
+		// No change, and a change too small to show, carry no sign.
+		0: "0.0¢", 0.0004: "0.0¢", -0.0004: "0.0¢",
+	} {
+		if got := Delta(in); got != want {
+			t.Errorf("Delta(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUntil(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	const day = 24 * time.Hour
+	for in, want := range map[time.Duration]string{
+		0:                "now",
+		59 * time.Second: "now",
+		40 * time.Minute: "40m",
+		5 * time.Hour:    "5h",
+		day - time.Hour:  "23h",
+		12 * day:         "12d",
+		29 * day:         "29d",
+		95 * day:         "3mo",
+		364 * day:        "12mo",
+		800 * day:        "2y",
+		// Gone by.
+		-90 * time.Second: "-1m",
+		-3 * day:          "-3d",
+	} {
+		if got := Until(now.Add(in), now); got != want {
+			t.Errorf("Until(now%+v) = %q, want %q", in, got, want)
 		}
 	}
 }

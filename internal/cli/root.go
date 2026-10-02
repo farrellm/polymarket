@@ -53,18 +53,24 @@ func Execute(ctx context.Context) error {
 
 // newCommand builds the root command, writing parsed flags into o.
 func newCommand(o *options) *cobra.Command {
+	var lf listFlags
 	cmd := &cobra.Command{
 		Use:   "polymarket",
 		Short: "browse Polymarket market data and export it to CSV",
 		Long: "polymarket is a read-only terminal browser for Polymarket.\n\n" +
 			"It drills down from tags to events to markets, shows one market in\n" +
-			"detail, and exports what it shows to CSV. It needs no credentials.",
+			"detail, and exports what it shows to CSV. It needs no credentials.\n\n" +
+			"With --tag it opens inside that tag, and the other flags set what its\n" +
+			"lists start out sorted and filtered by; esc still leads up to the tags.",
+		Example: "polymarket\n" +
+			"polymarket --tag politics --min-volume 10000 --order endDate",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runBrowser(cmd, o)
+			return runBrowser(cmd, o, &lf)
 		},
 	}
+	bindFilterFlags(cmd, &lf)
 
 	pf := cmd.PersistentFlags()
 	pf.DurationVar(&o.timeout, "timeout", 15*time.Second, "give up on a request after this long")
@@ -81,9 +87,13 @@ func newCommand(o *options) *cobra.Command {
 	return cmd
 }
 
-// runBrowser opens the browser on the Tags level and runs it until the user
-// leaves.
-func runBrowser(cmd *cobra.Command, o *options) error {
+// runBrowser opens the browser, on the Tags level or inside the tag the
+// flags name, and runs it until the user leaves.
+func runBrowser(cmd *cobra.Command, o *options, lf *listFlags) error {
+	f, err := lf.filter()
+	if err != nil {
+		return err
+	}
 	in, out := cmd.InOrStdin(), cmd.OutOrStdout()
 	if !isTerminalStream(in) || !isTerminalStream(out) {
 		// Drawing into a pipe helps nobody, and neither does waiting for
@@ -91,11 +101,21 @@ func runBrowser(cmd *cobra.Command, o *options) error {
 		return errors.New("the browser needs a terminal; polymarket export writes CSV without one")
 	}
 
+	client := o.client()
+	opts := ui.Options{Filter: f.Filter}
+	if f.tagSlug != "" {
+		// A misspelt tag is an error here, before the screen is taken over,
+		// rather than a list with nothing in it.
+		if opts.Tag, err = findTag(cmd.Context(), client, f); err != nil {
+			return err
+		}
+	}
+
 	// The context is cancelled by a signal from outside; ctrl+c at the
 	// keyboard is a key like any other, which the browser quits on.
-	p := tea.NewProgram(ui.New(o.client()),
+	p := tea.NewProgram(ui.New(client, opts),
 		tea.WithContext(cmd.Context()), tea.WithInput(in), tea.WithOutput(out))
-	_, err := p.Run()
+	_, err = p.Run()
 	return err
 }
 

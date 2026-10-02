@@ -8,6 +8,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,6 +82,9 @@ type screen interface {
 	hints() []key.Binding
 	// typing reports that a prompt is open, so letters are text, not keys.
 	typing() bool
+	// exports are the datasets the screen can write out, the one most its
+	// own first, or none if there is nothing to write yet.
+	exports() []exportChoice
 	// close stops the screen's requests. It is called on leaving the screen.
 	close()
 }
@@ -104,6 +108,8 @@ type nav struct {
 
 // Model is the Bubble Tea model for the browser.
 type Model struct {
+	// env is what the screens are built with, and the export dialog.
+	env  env
 	keys keyMap
 	st   styles
 
@@ -114,6 +120,15 @@ type Model struct {
 	stack []screen
 	// help is true while the keys are listed over the screen.
 	help bool
+
+	// dialog is the export dialog while it is open, and job the export
+	// under way, if one is. Both are the root's rather than a screen's: an
+	// export goes on while the levels are moved through.
+	dialog *exportDialog
+	job    *exportJob
+	// notice is what the status bar says until the next key: how an export
+	// ended.
+	notice status
 }
 
 // New creates the browser, opened on the Tags level, or inside the tag the
@@ -137,6 +152,7 @@ func New(client Client, o Options) *Model {
 	if filter.Order.Name == "" {
 		filter.Order = api.DefaultFilter().Order
 	}
+	m.env = e
 	m.stack = []screen{newTags(e, filter)}
 	if o.Tag != nil {
 		// The sample has not arrived, so there are no rows to start with.
@@ -162,6 +178,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// A message is for the moment it was shown in.
+		m.notice = status{}
 		top := m.top()
 		switch {
 		case key.Matches(msg, m.keys.Interrupt):
@@ -170,6 +188,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Any key puts the screen back.
 			m.help = false
 			return m, nil
+		case m.dialog != nil:
+			return m, m.updateExport(msg)
 		case top.typing():
 			// Everything else is the prompt's to read.
 		case key.Matches(msg, m.keys.Help):
@@ -180,9 +200,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Tags):
 			m.popTo(1)
 			return m, nil
+		case key.Matches(msg, m.keys.Export):
+			m.openExport()
+			return m, nil
+		case m.job != nil && key.Matches(msg, m.keys.Back):
+			// Esc first stops the export; with none running it is the
+			// screen's.
+			m.job.stopping = true
+			m.job.cancel()
+			return m, nil
 		}
 		cmd, n := top.update(msg)
 		return m, tea.Batch(cmd, m.navigate(n))
+	}
+
+	if cmd, ok := m.exported(msg); ok {
+		return m, cmd
 	}
 
 	// The result of a request. It may belong to a screen further up the
@@ -198,6 +231,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if i == len(m.stack)-1 {
 			next = n
 		}
+	}
+	if m.dialog != nil {
+		// Text pasted into the dialog arrives as a message of its own.
+		cmds = append(cmds, m.dialog.edit(msg))
 	}
 	cmds = append(cmds, m.navigate(next))
 	return m, tea.Batch(cmds...)
@@ -234,7 +271,16 @@ func (m *Model) quit() tea.Cmd {
 	for _, s := range m.stack {
 		s.close()
 	}
-	return tea.Quit
+	job := m.job
+	if job == nil {
+		return tea.Quit
+	}
+	// An export stopped half way takes its temporary file with it, which
+	// it must be given the time to do.
+	return func() tea.Msg {
+		job.finish()
+		return tea.QuitMsg{}
+	}
 }
 
 // The frame takes a column on either side, and four lines: the title bar,
@@ -269,6 +315,8 @@ func (m *Model) View() tea.View {
 	if m.help {
 		_, market := m.top().(*detail)
 		content = helpView(m.keys, m.st, inner, market)
+	} else if m.dialog != nil {
+		content = m.dialog.view(inner)
 	}
 	body := strings.Split(content, "\n")
 	for i := range m.bodyHeight() {
@@ -347,8 +395,25 @@ func (m *Model) titleBar() string {
 func (m *Model) statusBar(w int) string {
 	s := m.top().status()
 	hints := m.top().hints()
-	if m.help {
+	switch {
+	case m.help:
 		s, hints = status{text: "the keys"}, []key.Binding{m.keys.closeHelp()}
+	case m.dialog != nil:
+		s, hints = status{text: "export"}, []key.Binding{m.keys.startExport(), m.keys.Cancel, m.keys.Next}
+	case m.top().typing():
+		// A prompt is being typed into there.
+	case m.notice != (status{}):
+		s = m.notice
+	case m.job != nil:
+		// Esc is the export's while it runs, not the screen's.
+		s.text = m.job.running()
+		rest := hints
+		hints = []key.Binding{m.keys.stopExport()}
+		for _, b := range rest {
+			if !slices.Contains(b.Keys(), "esc") {
+				hints = append(hints, b)
+			}
+		}
 	}
 	left := s.text
 	if s.failure != "" {

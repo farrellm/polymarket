@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"iter"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/farrellm/polymarket/internal/api"
+	"github.com/farrellm/polymarket/internal/export"
 	"github.com/farrellm/polymarket/internal/format"
 )
 
@@ -284,38 +286,65 @@ func (b *browse) load(keep bool) tea.Cmd {
 	}
 
 	msg := pageMsg{owner: b, tab: b.tab, gen: l.gen}
-	client, filter, search, tag := b.client, b.filter, b.search, b.tag
+	asked := b.asked()
 	l.fetch = func(cursor string) tea.Cmd {
 		return func() tea.Msg {
 			msg := msg
 			msg.asked = cursor
-			switch {
-			case msg.tab == tabEvents:
-				q := filter.EventsQuery()
-				// The ID, not the slug: an event may embed a tag under a
-				// slug that differs in case from the tag's own.
-				q.Limit, q.Cursor, q.TagID, q.TitleSearch = pageSize, cursor, tag.ID, search
-				msg.events, msg.next, msg.err = client.Events(ctx, q)
-				if len(msg.events) == 0 {
-					msg.next = ""
-				}
-			case search != "":
-				// The markets listing has no text search: the events found
-				// are flattened into their markets instead.
-				msg.markets, msg.next, msg.err = api.SearchMarkets(ctx, client, filter, search, tag.Slug, cursor)
-			default:
-				q := filter.MarketsQuery()
-				q.Limit, q.Cursor, q.TagID = pageSize, cursor, tag.ID
-				msg.markets, msg.next, msg.err = client.Markets(ctx, q)
-				if len(msg.markets) == 0 {
-					msg.next = ""
-				}
+			if msg.tab == tabEvents {
+				msg.events, msg.next, msg.err = asked.events(ctx, cursor)
+			} else {
+				msg.markets, msg.next, msg.err = asked.markets(ctx, cursor)
 			}
 			return msg
 		}
 	}
 	b.render(b.tab)
 	return l.fetch("")
+}
+
+// question is what a tag's listings are asked: the tag, the filter and the
+// search, as they stood when the asking began. The pages of a load and the
+// rows of an export are both answers to one.
+type question struct {
+	client Client
+	tag    api.Tag
+	filter api.Filter
+	search string
+}
+
+func (b *browse) asked() question {
+	return question{client: b.client, tag: b.tag, filter: b.filter, search: b.search}
+}
+
+// events fetches the page of events after a cursor.
+func (q question) events(ctx context.Context, cursor string) ([]api.Event, string, error) {
+	eq := q.filter.EventsQuery()
+	// The ID, not the slug: an event may embed a tag under a slug that
+	// differs in case from the tag's own.
+	eq.Limit, eq.Cursor, eq.TagID, eq.TitleSearch = pageSize, cursor, q.tag.ID, q.search
+	events, next, err := q.client.Events(ctx, eq)
+	if len(events) == 0 {
+		next = ""
+	}
+	return events, next, err
+}
+
+// markets fetches the page of markets after a cursor, each with its tags,
+// which an export of them writes out.
+func (q question) markets(ctx context.Context, cursor string) ([]api.Market, string, error) {
+	if q.search != "" {
+		// The markets listing has no text search: the events found are
+		// flattened into their markets instead.
+		return api.SearchMarkets(ctx, q.client, q.filter, q.search, q.tag.Slug, cursor)
+	}
+	mq := q.filter.MarketsQuery()
+	mq.Limit, mq.Cursor, mq.TagID, mq.IncludeTags = pageSize, cursor, q.tag.ID, true
+	markets, next, err := q.client.Markets(ctx, mq)
+	if len(markets) == 0 {
+		next = ""
+	}
+	return markets, next, err
 }
 
 // refreshEvent fetches the event on show again, for its markets as they now
@@ -654,6 +683,81 @@ func (b *browse) note() string {
 
 func (b *browse) typing() bool { return b.searching || b.form != nil || b.picker != nil }
 
+// exports offers the rows of the tab on show: its events, or its markets,
+// which are also to be had an outcome to a row. Under a tag each can be the
+// rows loaded or all that the filter and the search select; an event's
+// markets are all in hand.
+func (b *browse) exports() []exportChoice {
+	l := b.cur()
+	asked := b.asked()
+	const loaded, matching = " loaded", "all that match"
+
+	if b.tab == tabEvents {
+		var scopes []exportScope
+		if events := slices.Clone(l.events); len(events) > 0 {
+			scopes = append(scopes, exportScope{
+				label: "the " + strconv.Itoa(len(events)) + loaded,
+				open: func(context.Context) export.Dataset {
+					return export.Events(export.Loaded(events))
+				},
+			})
+		}
+		scopes = append(scopes, exportScope{
+			label: matching,
+			open: func(ctx context.Context) export.Dataset {
+				return export.Events(api.Pages(ctx, func(cursor string) ([]api.Event, string, error) {
+					return asked.events(ctx, cursor)
+				}))
+			},
+		})
+		return []exportChoice{{name: "events", scopes: scopes}}
+	}
+
+	markets := slices.Clone(l.markets)
+	held := "the " + strconv.Itoa(len(markets)) + loaded
+	if b.event != nil {
+		// A market inside its event is sent without it, and without tags.
+		for i := range markets {
+			markets[i] = within(markets[i], b.event)
+			if markets[i].Tags == nil {
+				markets[i].Tags = b.event.Tags
+			}
+		}
+		held = "the " + strconv.Itoa(len(markets)) + " listed"
+	}
+	datasets := []struct {
+		name string
+		of   func(pages iter.Seq2[[]api.Market, error]) export.Dataset
+	}{{"markets", export.Markets}, {"outcomes", export.Outcomes}}
+
+	var choices []exportChoice
+	for _, d := range datasets {
+		var scopes []exportScope
+		if len(markets) > 0 {
+			scopes = append(scopes, exportScope{
+				label: held,
+				open: func(context.Context) export.Dataset {
+					return d.of(export.Loaded(markets))
+				},
+			})
+		}
+		if b.event == nil {
+			scopes = append(scopes, exportScope{
+				label: matching,
+				open: func(ctx context.Context) export.Dataset {
+					return d.of(api.Pages(ctx, func(cursor string) ([]api.Market, string, error) {
+						return asked.markets(ctx, cursor)
+					}))
+				},
+			})
+		}
+		if len(scopes) > 0 {
+			choices = append(choices, exportChoice{name: d.name, scopes: scopes})
+		}
+	}
+	return choices
+}
+
 func (b *browse) hints() []key.Binding {
 	k := b.keys
 	switch {
@@ -672,7 +776,7 @@ func (b *browse) hints() []key.Binding {
 	if b.tagged() {
 		hints = append(hints, k.SubTag)
 	}
-	return append(hints, k.Sort, k.Help, k.Back, k.Quit)
+	return append(hints, k.Sort, k.Export, k.Help, k.Back, k.Quit)
 }
 
 func (b *browse) status() status {

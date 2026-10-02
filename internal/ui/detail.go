@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,12 @@ const (
 	bookWidth = 32
 	// paneGap is the space between the two.
 	paneGap = 2
+
+	// historyPageSize and tradesPageSize are the most the Data API hands
+	// out per request of each, which is what an export of all of either
+	// asks for.
+	historyPageSize = 10000
+	tradesPageSize  = 1000
 )
 
 // detailTab is one of the two views of a market: its prices, or what it is
@@ -916,15 +923,95 @@ func (d *detail) note() string { return "" }
 
 func (d *detail) typing() bool { return false }
 
+// exports offers what the panes show: the price history, the trades and the
+// order book. Each can be what is on screen, as it is held, or the whole of
+// it, fetched: every outcome's, and the trades back to the first.
+func (d *detail) exports() []exportChoice {
+	market := d.market
+	m := &market
+	client := d.client
+	o, index, ok := d.selected()
+	interval := chartIntervals[d.interval].name
+	// Only an outcome with a token can be asked about.
+	tradable := export.Tradable(m)
+
+	var history, trades, book []exportScope
+	if p := d.charts[d.keyOf(o)]; ok && p != nil && p.failure == "" && len(p.points) > 0 {
+		points := slices.Clone(p.points)
+		history = append(history, exportScope{
+			label: o.Label + " · " + interval + ", as charted",
+			open: func(context.Context) export.Dataset {
+				return export.History(export.Loaded([]export.Series{{Market: m, Outcome: index, Points: points}}))
+			},
+		})
+	}
+	if len(tradable) > 0 {
+		history = append(history, exportScope{
+			label: "every outcome · " + interval,
+			open: func(ctx context.Context) export.Dataset {
+				return export.History(export.HistoryPages(ctx, client, m, tradable, interval, historyPageSize))
+			},
+		})
+	}
+
+	if held := slices.Clone(d.trades.trades); len(held) > 0 {
+		trades = append(trades, exportScope{
+			label: "the " + strconv.Itoa(len(held)) + " latest",
+			open: func(context.Context) export.Dataset {
+				return export.Trades(export.Loaded(held))
+			},
+		})
+	}
+	if m.ConditionID != "" {
+		trades = append(trades, exportScope{
+			label: "all of them",
+			open: func(ctx context.Context) export.Dataset {
+				q := api.TradesQuery{ConditionID: m.ConditionID, Limit: tradesPageSize}
+				return export.Trades(api.Pages(ctx, func(cursor string) ([]api.Trade, string, error) {
+					q.Cursor = cursor
+					return client.Trades(ctx, q)
+				}))
+			},
+		})
+	}
+
+	if p := d.books[o.TokenID]; ok && p != nil && p.failure == "" && p.book != nil {
+		held := p.book
+		book = append(book, exportScope{
+			label: o.Label + ", as shown",
+			open: func(context.Context) export.Dataset {
+				return export.Book(export.Loaded([]export.Depth{{Market: m, Outcome: index, Book: held}}))
+			},
+		})
+	}
+	// A market that has closed has no book to fetch.
+	if len(tradable) > 0 && !m.Closed {
+		book = append(book, exportScope{
+			label: "every outcome",
+			open: func(ctx context.Context) export.Dataset {
+				return export.Book(export.BookPages(ctx, client, m, tradable))
+			},
+		})
+	}
+
+	var choices []exportChoice
+	for _, c := range []exportChoice{{"history", history}, {"trades", trades}, {"book", book}} {
+		if len(c.scopes) > 0 {
+			choices = append(choices, c)
+		}
+	}
+	return choices
+}
+
 func (d *detail) hints() []key.Binding {
 	k := d.keys
 	if d.tab == tabAbout {
 		// The same key, named for where it leads from here.
 		back := key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "market"))
-		return []key.Binding{back, k.Browse, k.Copy, k.Help, k.Back, k.Quit}
+		return []key.Binding{back, k.Browse, k.Copy, k.Export, k.Help, k.Back, k.Quit}
 	}
 	about := key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "about"))
-	return []key.Binding{about, k.Interval, k.Refresh, k.Browse, k.Help, k.Back, k.Quit}
+	return []key.Binding{about, k.Interval, k.Refresh, k.Browse, k.Export, k.Help, k.Back, k.Quit}
 }
 
 func (d *detail) status() status {

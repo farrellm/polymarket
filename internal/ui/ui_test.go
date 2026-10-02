@@ -969,7 +969,11 @@ func TestViewFitsTheWindow(t *testing.T) {
 
 		m.Update(tea.WindowSizeMsg{Width: size.w, Height: size.h})
 		check("tags")
-		press(m, "/")
+		press(m, "e", "shift+tab")
+		typeText(m, strings.Repeat("/a/long/way/down", 12))
+		press(m, "enter")
+		check("export dialog")
+		press(m, "esc", "/")
 		typeText(m, "a tag that does not exist anywhere")
 		check("find")
 		press(m, "esc", "G", "enter")

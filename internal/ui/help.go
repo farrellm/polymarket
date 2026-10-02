@@ -22,14 +22,14 @@ func (k keyMap) helpColumns(market bool) [2][]helpGroup {
 	if market {
 		return [2][]helpGroup{
 			{moving, {"Levels", []key.Binding{k.Back, k.Tags}}},
-			{{"Market", []key.Binding{k.About, k.Interval, k.Refresh, k.Browse, k.Copy, k.CopyID}}, general},
+			{{"Market", []key.Binding{k.About, k.Interval, k.Refresh, k.Export, k.Browse, k.Copy, k.CopyID}}, general},
 		}
 	}
 	return [2][]helpGroup{
 		{moving, {"Levels", []key.Binding{k.Open, k.Back, k.Tags, k.Tab}}},
 		{
-			{"Lists", []key.Binding{k.Find, k.Search, k.Filter, k.SubTag, k.Sort, k.Reverse, k.Refresh}},
-			{"Filter form", []key.Binding{k.Next, k.Previous, k.Right, k.Apply, k.Cancel}},
+			{"Lists", []key.Binding{k.Find, k.Search, k.Filter, k.SubTag, k.Sort, k.Reverse, k.Refresh, k.Export}},
+			{"Forms", []key.Binding{k.Next, k.Previous, k.Right, k.Apply, k.Cancel}},
 			general,
 		},
 	}

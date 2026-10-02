@@ -450,9 +450,9 @@ func TestHelpOnAMarket(t *testing.T) {
 	press(m, "h")
 	screen := screenText(m)
 	wantContains(t, "help", screen, "Moving", "Levels", "Market", "market / about", "interval", "refresh",
-		"website", "copy slug", "copy condition ID", "quit")
+		"export", "website", "copy slug", "copy condition ID", "quit")
 	// The keys of the lists do nothing here, and are left out.
-	for _, absent := range []string{"Filter form", "sub-tag", "find tag"} {
+	for _, absent := range []string{"Forms", "sub-tag", "find tag"} {
 		if strings.Contains(screen, absent) {
 			t.Errorf("help on a market mentions %q:\n%s", absent, screen)
 		}

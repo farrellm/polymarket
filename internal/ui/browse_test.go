@@ -640,7 +640,7 @@ func TestHelp(t *testing.T) {
 	press(m, "h")
 	screen := screenText(m)
 	wantContains(t, "help", screen, "Moving", "half a page down", "Levels", "events / markets",
-		"Lists", "find tag", "search", "filter", "sub-tag", "reverse", "Filter form", "next field", "quit")
+		"Lists", "find tag", "search", "filter", "sub-tag", "reverse", "export", "Forms", "next field", "quit")
 	wantContains(t, "status bar", statusLine(m), "any key back")
 	// The frame is the screen's own, and the key that closes the help does
 	// nothing else.

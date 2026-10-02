@@ -319,6 +319,50 @@ func eventRow(e *api.Event) []string {
 	}
 }
 
+// TagStat is a tag and what the events filed under it add up to, over
+// whatever sample of events they were counted in.
+type TagStat struct {
+	Tag api.Tag
+	// Events is how many of the sample's events are filed under the tag.
+	Events int
+	// Volume24h and Liquidity are those events' summed.
+	Volume24h float64
+	Liquidity float64
+}
+
+var tagColumns = []Column{
+	{"id", Text},
+	{"slug", Text},
+	{"label", Text},
+	{"events", Number},
+	{"volume_24h", Number},
+	{"liquidity", Number},
+}
+
+// Tags is the tags dataset: one row per tag, with the figures of the sample
+// of events it was ranked over. An event counts towards every tag it is
+// filed under, so the rows do not add up to the sample.
+func Tags(pages iter.Seq2[[]TagStat, error]) Dataset {
+	return &table{
+		name:    "tags",
+		columns: tagColumns,
+		rows: flatten(pages,
+			func(t *TagStat) [][]string { return [][]string{tagRow(t)} },
+			nil),
+	}
+}
+
+func tagRow(t *TagStat) []string {
+	return []string{
+		t.Tag.ID,
+		t.Tag.Slug,
+		t.Tag.Label,
+		strconv.Itoa(t.Events),
+		strconv.FormatFloat(t.Volume24h, 'f', -1, 64),
+		strconv.FormatFloat(t.Liquidity, 'f', -1, 64),
+	}
+}
+
 // ofOutcomeColumns are what the datasets about one outcome of one market start
 // with: which market, and which of its outcomes.
 var ofOutcomeColumns = []Column{

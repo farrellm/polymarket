@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/farrellm/polymarket/internal/api"
+	"github.com/farrellm/polymarket/internal/export"
 	"github.com/farrellm/polymarket/internal/format"
 )
 
@@ -294,6 +295,26 @@ func (t *tags) note() string {
 
 func (t *tags) typing() bool { return t.finding }
 
+// exports offers the tags listed, as they are narrowed and sorted. The All
+// row is not a tag, and is left out.
+func (t *tags) exports() []exportChoice {
+	var stats []export.TagStat
+	for _, r := range t.shown {
+		if !r.isAll() {
+			stats = append(stats, export.TagStat{Tag: r.tag, Events: r.events, Volume24h: r.volume24h, Liquidity: r.liquidity})
+		}
+	}
+	if len(stats) == 0 {
+		return nil
+	}
+	return []exportChoice{{name: "tags", scopes: []exportScope{{
+		label: "the " + countOf(len(stats), "tag") + " listed",
+		open: func(context.Context) export.Dataset {
+			return export.Tags(export.Loaded(stats))
+		},
+	}}}}
+}
+
 // needle is the find text as it is matched: trimmed, in lower case.
 func (t *tags) needle() string {
 	return strings.ToLower(strings.TrimSpace(t.input.Value()))
@@ -305,9 +326,9 @@ func (t *tags) hints() []key.Binding {
 	case t.finding:
 		return []key.Binding{k.Open, k.ClearFind}
 	case t.needle() != "":
-		return []key.Binding{k.ClearFind, k.Find, k.Sort, k.Refresh, k.Quit}
+		return []key.Binding{k.ClearFind, k.Find, k.Sort, k.Refresh, k.Export, k.Help, k.Quit}
 	default:
-		return []key.Binding{k.Find, k.Sort, k.Refresh, k.Quit}
+		return []key.Binding{k.Find, k.Sort, k.Refresh, k.Export, k.Help, k.Quit}
 	}
 }
 

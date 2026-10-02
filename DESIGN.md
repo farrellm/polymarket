@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) implemented; the rest is design: the export dialog behind `e`, and the README. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history and the trades on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) implemented: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02.
 
 ## 1. Summary
 
@@ -25,9 +25,8 @@ Same baseline as grid (`go 1.26.6` in go.mod; fang + cobra entry point; Bubble T
 | Module | Version | Used for |
 |---|---|---|
 | `charm.land/bubbletea/v2` | v2.0.10 | program loop, messages, commands |
-| `charm.land/bubbles/v2` | v2.2.1 | `textinput`, `viewport`, `key`; `progress` for the export dialog (milestone 7) |
+| `charm.land/bubbles/v2` | v2.2.1 | `textinput`, `viewport`, `key` |
 | `charm.land/lipgloss/v2` | v2.0.6 | layout, borders, colour, tabs |
-| `charm.land/huh/v2` | v2.0.3 | the export dialog (milestone 7; not yet a dependency) |
 | `charm.land/log/v2` | v2.0.1 | `--debug` log file (never the screen) |
 | `github.com/charmbracelet/fang` + `spf13/cobra` | v1.0.0 / v1.10.2 | CLI, help, completion, `--version` |
 | `golang.org/x/time/rate` | latest | client-side rate limiter |
@@ -55,7 +54,10 @@ where huh was the plan. A huh `Input` wraps a `textinput` whose cursor blink it 
 way to turn off, which is a timer redrawing the screen for as long as the form is open,
 and a huh form moves between its fields with messages of its own that the program has
 to route back to it. Neither fits a screen driven by `Update` alone, in the tests or
-otherwise. The export dialog of milestone 7 has the same choice to make.
+otherwise. The export dialog (`ui/exportdlg.go`) is hand-rolled for the same reasons, on
+the same pattern, so huh never became a dependency. Nor did `bubbles/progress`: an export
+of everything that matches does not know how many rows are to come, so there is no
+fraction to draw, and the status bar counts the rows instead.
 
 ## 3. Layout of the repository
 
@@ -78,6 +80,8 @@ internal/api/               HTTP client for the three services
     pager.go                generic cursor iterator
 internal/export/            datasets -> CSV (no UI imports)
     dataset.go              Dataset interface, column schemas
+    pages.go                the iterators that fetch a market's history and book as
+                            they are read, for the command line and the browser alike
     csv.go                  writer: temp file + atomic rename, or stdout
 internal/format/            money ($1.2M), price (66.5¢), deltas (+3.5¢), relative dates (2y)
 internal/ui/                Bubble Tea models
@@ -92,7 +96,7 @@ internal/ui/                Bubble Tea models
     detail.go               one market: outcomes, chart, book, trades; the About tab
     spark.go                the chart: a price history resampled into block characters
     open.go                 handing a page to the system's browser
-    exportdlg.go            to come: export dialog + progress
+    exportdlg.go            the export dialog, and the export it sets running
 testdata/                   recorded API responses; golden/ holds the golden CSVs
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
 ```
@@ -115,7 +119,7 @@ All endpoints are public and unauthenticated. Three services:
 | Call | Notes |
 |---|---|
 | `GET /events/keyset` | `limit` (max 100), `order`, `ascending`, `after_cursor`, `closed`, `tag_id`/`tag_slug`, `title_search`, `volume_min`, `liquidity_min`, `end_date_min/max`. Returns `{events, next_cursor}`; each event embeds its `markets` and `tags`. The browser asks by `tag_id`, the exports by `tag_slug`. |
-| `GET /markets/keyset` | Same paging; `closed`, `tag_id`, `volume_num_min`, `liquidity_num_min`, `end_date_min/max`, `include_tag`. Returns `{markets, next_cursor}`. No text-search parameter. |
+| `GET /markets/keyset` | Same paging; `closed`, `tag_id`, `volume_num_min`, `liquidity_num_min`, `end_date_min/max`, `include_tag`. Returns `{markets, next_cursor}`. No text-search parameter. The browser asks with `include_tag=true`, as the exports do, so that the rows it holds can be exported with their tags: a page of 100 is then 890 KB in 0.49 s against 750 KB in 0.35 s. |
 | `GET /events/{id}`, `GET /markets/{id}` | refresh one item. A market fetched this way carries neither its event nor its tags |
 | `GET /markets/slug/{slug}` | the market `--market` names by its slug, with a summary of its event (no tags) |
 | `GET /tags/slug/{slug}` | resolve a tag typed by name (`--tag`, or a tag outside the ranked set) |
@@ -351,7 +355,7 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
    (OSC 52).
 
 **Overlays** — help (generated from the key map, as in grid), filter form, sub-tag
-picker, export dialog. Each takes the place of the list inside the frame rather than
+picker, export dialog (§6). Each takes the place of the list inside the frame rather than
 floating over it. The help lists the keys of the lists, or, on a market, those of its
 detail in their place: both together do not fit 24 lines. The title bar's note leads
 with the sort and follows it with the search and the filter; too long for the bar, it
@@ -375,7 +379,7 @@ Follows grid where the meaning carries over.
 | `s` / `S` | cycle the sort (24 h, week, month and total volume, liquidity, end, start) / flip direction |
 | `i` | on a market: cycle the chart's interval (`1d`, `1w`, `1m`, `max`) |
 | `r` | refresh |
-| `e` | export (milestone 7) |
+| `e` | export what the screen shows, or all of it (§6) |
 | `o` | on a market: open it on polymarket.com |
 | `y` / `Y` | on a market: copy its slug / its condition ID |
 | `h` `?` | help |
@@ -410,16 +414,19 @@ Follows grid where the meaning carries over.
 - Root `Model` owns size, a screen stack (`tags`, `browse`, `detail`; `browse` is one
   type parameterised by scope — a tag, a sub-tag or an event), the active overlay and the
   status bar; it routes key messages to the overlay if one is open, else to the top
-  screen, and sizes a screen when it comes into view. In practice only the help is
-  the root's: the search prompt, the filter form and the picker belong to the screen
-  that opened them, which reports `typing` so that letters reach it. The result of a request goes to
+  screen, and sizes a screen when it comes into view. In practice the help and the
+  export dialog are the root's, with the export under way: it goes on while the levels
+  are moved through, so it cannot be a screen's. A screen says what it has to export
+  (`exports`), and that is all it knows of it. The search prompt, the filter form and
+  the picker belong to the screen that opened them, which reports `typing` so that
+  letters reach it. The result of a request goes to
   every screen on the stack, since the Tags level goes on loading under a lower one; each
   recognises its own by message type, owner (two levels of the same kind may be
   stacked, a sub-tag under its tag) and generation. A screen answers a message with a
   command and a `nav` (push this screen, or pop), which only the top one may use.
 - All I/O happens in `tea.Cmd`s returning typed messages (`pageMsg`, `bookMsg`,
-  `historyMsg`, `tradesMsg`, `marketMsg`, `exportProgressMsg`), an error being a field of
-  the message it would have been. `Update` never blocks.
+  `historyMsg`, `tradesMsg`, `marketMsg`, `exportProgressMsg`, `exportDoneMsg`), an error
+  being a field of the message it would have been. `Update` never blocks.
 - Each request carries a generation number; a response whose generation is stale (the
   user changed sort, filter or screen meanwhile) is dropped. Each screen holds a
   `context.CancelFunc` for its in-flight requests and calls it on leaving.
@@ -439,7 +446,7 @@ Follows grid where the meaning carries over.
 
 | Dataset | Source | One row per |
 |---|---|---|
-| `tags` | the Tags level | tag (`id, slug, label, events, volume_24h, liquidity`) |
+| `tags` | the Tags level; the browser's alone, since the sample it is counted over is | tag (`id, slug, label, events, volume_24h, liquidity`) |
 | `markets` | browse list (Markets tab, or an event's markets), scoped to the current tag | market |
 | `events` | browse list (Events tab), scoped to the current tag | event |
 | `outcomes` | same as `markets`, long layout | market × outcome |
@@ -449,15 +456,53 @@ Follows grid where the meaning carries over.
 
 ### In the TUI
 
-`e` opens a huh form: dataset (pre-selected from the current screen), scope, and path.
+`e` opens a form of four fields: the dataset, which rows, how many at most, and the file.
 
-- Scope for list datasets: **loaded rows** (instant, no requests) or **all matching the
-  current filters** (drains the cursor in the background).
-- Default path `./polymarket-<dataset>-<YYYYMMDD-HHMMSS>.csv`; `~` is expanded; an existing
-  file prompts before overwrite.
-- The export runs as a command; the status bar shows a `progress`/row count and `esc`
-  cancels it. The UI stays usable meanwhile. On success the status bar shows the path and
-  row count.
+```
+ Export
+
+ ▸Dataset        [markets]  outcomes
+  Rows           [the 100 loaded]  all that match
+  At most        10000
+  File           ./polymarket-markets-20261002-134156.csv
+```
+
+- The datasets are the screen's own (`screen.exports`), the first chosen: `tags` on the
+  Tags level; `events` on the Events tab; `markets` and `outcomes` on the Markets tab and
+  on an event's markets; `history`, `trades` and `book` on a market.
+- Rows are either **what the screen holds**, written with no request, or **all there
+  is**, fetched as it is written:
+
+  | Screen | Held | Fetched |
+  |---|---|---|
+  | Tags | the tags listed, as found and sorted, without the All row | – |
+  | a tag's events, markets | the rows loaded | all that match the filter and the search, in the order on screen |
+  | an event's markets | the markets listed, each given its event and its event's tags | – (they are all in hand) |
+  | market: history | the chart: one outcome over the interval on show | every outcome, over that interval |
+  | market: trades | the latest 50 | all of them, newest first |
+  | market: book | the book on show | every outcome's, fetched again |
+
+  What is held is copied when the dialog opens, so the export reads nothing the screen
+  goes on changing.
+- At most caps the rows (`export.Options.Limit`) at 10 000 unless changed; blank is no
+  limit. It applies to either kind of rows.
+- The file defaults to `./polymarket-<dataset>-<YYYYMMDD-HHMMSS>.csv`, and follows the
+  dataset until it is edited; a leading `~/` is the home directory. The dialog checks it
+  on `enter`: a missing directory or a directory in the file's place keeps the dialog
+  open, and a file that exists is overwritten only on a second `enter`.
+- The export runs on a goroutine of its own, started by a command, and reports through a
+  channel that a command listens on: a row count at most every 100 ms, and the end. The
+  status bar reads `exporting markets: 1401 rows` with `esc stop export` first among the
+  hints; the browser stays usable meanwhile, except that `esc` stops the export before it
+  means anything else, and a second export has to wait. A prompt keeps the status bar
+  and `esc` while it is open.
+- The status bar then says how it ended, until the next key: `wrote 250 rows to <file>`
+  (`wrote the first 250 rows …` if the cap cut it short, then the dataset's notes), that it
+  was cancelled and the file not written, or what went wrong. The file is named and the
+  dataset is not, since at 80 columns there is room for one and the default file name
+  holds the other.
+- Quitting stops an export and waits for it to have stopped, so that its temporary file
+  is removed.
 
 ### Headless
 
@@ -497,8 +542,8 @@ a `Summary{Rows, Capped, Notes}`. A `Dataset` is built from an iterator of pages
 `export.Loaded(rows)` for the rows on screen. The datasets about a market are built the
 same way: `export.Trades` from pages of trades, `export.History` from pages of
 `Series{Market, Outcome, Points}` and `export.Book` from `Depth{Market, Outcome, Book}`,
-so that the browser can hand over what it holds and the command line an iterator that
-fetches as it goes.
+so that the browser can hand over what it holds, and either it or the command line an
+iterator that fetches as it goes (`export.HistoryPages`, `export.BookPages`).
 
 The datasets about one market (`history`, `trades`, `book`) take none of those but the
 last three, and name their market instead:
@@ -564,8 +609,11 @@ rather than quietly dropped.
   touched, so a negative number stays a number.
 - Written to `<path>.tmp` in the destination directory and renamed on success, so a
   cancelled or failed export leaves no partial file.
-- "All matching" has a safety cap (`--limit`, default 10 000 rows in the TUI, with the
-  cap stated in the dialog) because the open-market set is tens of thousands of rows.
+- `tags` columns: `id, slug, label, events, volume_24h, liquidity`. The figures are sums
+  over the sample of events the Tags level ranks by, so an event counts towards each of
+  its tags.
+- "All matching" has a safety cap (`--limit`, default 10 000 rows in the TUI, where it is
+  a field of the dialog) because the open-market set is tens of thousands of rows.
 
 ## 7. CLI
 
@@ -641,7 +689,10 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   (`step`); tag aggregation from a fixture page; drill down and back up restoring the
   cursor; stale-generation responses dropped; paging trigger; resize down to 80×24 and
   below; the market detail over recorded books, histories and trades: one request per
-  pane, the cache per outcome and interval, each pane failing alone, a refresh overtaken.
+  pane, the cache per outcome and interval, each pane failing alone, a refresh overtaken;
+  the export dialog on every level, writing into a temporary directory the test has moved
+  into: what each dataset holds, the requests "all there is" makes, the cap, the checks
+  on the file, an export stopped by `esc` and by quitting leaving nothing behind.
 - `internal/cli`: flag parsing to filter state; completion for dataset, `--order` and
   `--interval`; the export commands end to end against an `httptest` stand-in for the
   three services.

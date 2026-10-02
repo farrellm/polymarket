@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"iter"
 	"net/http"
 	"slices"
 	"strconv"
@@ -118,48 +117,6 @@ func outcomesOf(m *api.Market, name string) ([]int, error) {
 	return nil, fmt.Errorf("the market %s has no outcome %q: it has %s", m.Slug, name, strings.Join(labels, ", "))
 }
 
-// historyPages pages through the price history of each outcome in turn.
-func historyPages(ctx context.Context, c *api.Client, m *api.Market, outcomes []int, interval string, limit int) iter.Seq2[[]export.Series, error] {
-	return func(yield func([]export.Series, error) bool) {
-		for _, index := range outcomes {
-			q := api.HistoryQuery{TokenID: m.Outcomes[index].TokenID, Interval: interval, Limit: limit}
-			pages := api.Pages(ctx, func(cursor string) ([]api.PricePoint, string, error) {
-				q.Cursor = cursor
-				return c.PriceHistory(ctx, q)
-			})
-			for points, err := range pages {
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				if !yield([]export.Series{{Market: m, Outcome: index, Points: points}}, nil) {
-					return
-				}
-			}
-		}
-	}
-}
-
-// bookPages fetches the order book of each outcome in turn. A market that is
-// no longer trading has none, which the service reports as not found.
-func bookPages(ctx context.Context, c *api.Client, m *api.Market, outcomes []int) iter.Seq2[[]export.Depth, error] {
-	return func(yield func([]export.Depth, error) bool) {
-		for _, index := range outcomes {
-			book, err := c.Book(ctx, m.Outcomes[index].TokenID)
-			if api.IsNotFound(err) {
-				err = fmt.Errorf("the market %s has no order book: it is not trading", m.Slug)
-			}
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			if !yield([]export.Depth{{Market: m, Outcome: index, Book: book}}, nil) {
-				return
-			}
-		}
-	}
-}
-
 // marketDataset is one of the datasets about a single market.
 type marketDataset struct {
 	name, short, example string
@@ -197,7 +154,7 @@ var marketDatasets = []marketDataset{
 			if err != nil {
 				return nil, err
 			}
-			return export.History(historyPages(ctx, c, m, outcomes, q.interval, pageLimit(historyPageSize, limit))), nil
+			return export.History(export.HistoryPages(ctx, c, m, outcomes, q.interval, pageLimit(historyPageSize, limit))), nil
 		},
 	},
 	{
@@ -235,7 +192,7 @@ var marketDatasets = []marketDataset{
 			if err != nil {
 				return nil, err
 			}
-			return export.Book(bookPages(ctx, c, m, outcomes)), nil
+			return export.Book(export.BookPages(ctx, c, m, outcomes)), nil
 		},
 	},
 }

@@ -31,8 +31,9 @@ type keyMap struct {
 	Sort    key.Binding
 	Reverse key.Binding
 	Refresh key.Binding
+	Export  key.Binding
 
-	// The keys of the filter form.
+	// The keys of the filter form and of the export dialog.
 	Next     key.Binding
 	Previous key.Binding
 	Left     key.Binding
@@ -79,6 +80,7 @@ func defaultKeyMap() keyMap {
 		Sort:      key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort")),
 		Reverse:   key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "reverse")),
 		Refresh:   key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		Export:    key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "export")),
 
 		Next:     key.NewBinding(key.WithKeys("tab", "down"), key.WithHelp("tab", "next field")),
 		Previous: key.NewBinding(key.WithKeys("shift+tab", "up"), key.WithHelp("shift+tab", "previous field")),

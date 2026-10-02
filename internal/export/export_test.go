@@ -191,6 +191,12 @@ func goldenDatasets(t *testing.T) []Dataset {
 			{Market: anna, Outcome: 0, Book: &book},
 			{Market: anna, Outcome: 1, Book: &api.Book{}},
 		})),
+		// A tag whose label needs quoting and guarding, and one under which
+		// nothing has traded.
+		Tags(Loaded([]TagStat{
+			{Tag: api.Tag{ID: "2", Slug: "politics", Label: "Politics"}, Events: 88, Volume24h: 12345678.9, Liquidity: 71e6},
+			{Tag: api.Tag{ID: "101", Slug: "plus-ev", Label: "+EV, \"sharp\""}, Events: 1},
+		})),
 	}
 }
 

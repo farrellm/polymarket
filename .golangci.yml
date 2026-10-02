@@ -1,0 +1,64 @@
+# The linters this repository is known to be clean under. Run `make lint`.
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - revive
+    - gocritic
+    - misspell
+    - copyloopvar
+    - perfsprint
+    - bodyclose
+    - nilerr
+    - unconvert
+    # No context stored in a struct: every API call takes one as a parameter.
+    - containedctx
+
+  settings:
+    revive:
+      # revive's recommended set, less the rule requiring a doc comment on
+      # every exported method.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+    misspell:
+      locale: UK
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test helpers legitimately ignore errors on cleanup paths.
+      - path: _test\.go
+        linters: [errcheck]
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

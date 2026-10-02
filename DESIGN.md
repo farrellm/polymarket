@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: design, not yet implemented. Endpoint shapes in §4 were checked against the live API on 2026-10-01.
+Status: milestone 1 (scaffold) implemented; the rest is design. Endpoint shapes in §4 were checked against the live API on 2026-10-01.
 
 ## 1. Summary
 

@@ -35,7 +35,7 @@ No Polymarket SDK: the read endpoints are plain JSON over HTTPS and a hand-writt
 of a few hundred lines is easier to test and keeps trading/signing code out of the binary.
 The price sparkline is hand-rolled (block characters, `ui/spark.go`, ~90 lines) rather
 than pulling in a chart library. It is several lines tall, an eighth of a cell to a step,
-scaled from the lowest price of the interval to the highest.
+always scaled from 0 to 1, so that a column's height is the price itself.
 
 The panes of the market detail say "loading…" in words where a `spinner` was the plan,
 for the reason the filter form gives below: a spinner is a timer that redraws the screen
@@ -315,9 +315,9 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
    │ No                             44.0¢   43.9¢   44.0¢    0.1¢   43.9¢   +5.8¢ │
    │                                                                              │
    │ Price of Yes · 1w  56.2¢  0.0¢  low 54.5¢ · high 63.6¢                       │
-   │                                                         ▁▂▆▆█▇▆▆▄▅▄▂         │
-   │                        ▁▁▁▁    ▁▁▁▁▁▁▁▁▁▁▁▇▆▆▆▂▃▅▅▅▆████████████████▇██ ▂    │
-   │ ▂▂▇▆▄▄▄▄▄▄▄▄▄▄▇▇▇▇▇▇▇▇███████▆▇████████████████████████████████████████▅█▃▁▄ │
+   │                                                                              │
+   │ ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▇▇▇▇▆▆▇▇▇▇▇▇▇▇▇▇▇▇██▇▇▇▇▇▇▇▇▇▆▆▆▆▆ │
+   │ ████████████████████████████████████████████████████████████████████████████ │
    │                                                                              │
    │ Book · Yes · 12:30:43             Trades                                     │
    │   Size     Bid     Ask    Size    Time         Side  Outcome   Price  Shares │
@@ -343,12 +343,13 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
    under a shorter interval, and its book pane says that it is not trading.
 
    The chart resamples the history by time into one column per character: each column
-   takes the last price at or before its end. It is drawn from the lowest price of the
-   interval to the highest, which the title states with the price now and the change
-   over the interval. The room under the outcomes is split a third to the chart (eight
-   lines at most) and the rest to the two tables. Trades are dated in the terminal's time
-   zone: the time for one of today, the day and the time for one of this year, else the
-   date.
+   takes the last price at or before its end. It is always drawn from 0 at the bottom to
+   1 at the top, so that the height of a column is the price itself and two charts can
+   be compared; the title states the lowest and the highest price of the interval with
+   the price now and the change over the interval. The room under the outcomes is split
+   a third to the chart (eight lines at most) and the rest to the two tables. Trades are
+   dated in the terminal's time zone: the time for one of today, the day and the time
+   for one of this year, else the date.
 
    `o` opens the market's page with the system's opener (`xdg-open`, `open`,
    `rundll32`), `y` copies its slug and `Y` its condition ID, through the terminal

@@ -39,33 +39,21 @@ func resample(points []api.PricePoint, columns int) []float64 {
 	return out
 }
 
-// bounds are the least and the greatest of the values.
-func bounds(values []float64) (low, high float64) {
-	low, high = math.Inf(1), math.Inf(-1)
-	for _, v := range values {
-		low, high = min(low, v), max(high, v)
-	}
-	return low, high
-}
-
-// spark draws values as columns of blocks, one column each and rows lines
-// tall, from the least of them at the bottom to the greatest at the top. The
-// least still shows an eighth of a cell, so the line is never broken, and
-// values that are all the same run across the middle.
+// spark draws prices as columns of blocks, one column each and rows lines
+// tall, from nought at the bottom to one at the top whatever the prices are,
+// so that the height of a column is the price itself. Nought still shows an
+// eighth of a cell, so the line is never broken, and a value outside the
+// scale is drawn at its nearer end.
 func spark(values []float64, rows int) []string {
 	if len(values) == 0 || rows <= 0 {
 		return nil
 	}
 	const eighths = 8
 	steps := rows * eighths
-	low, high := bounds(values)
 
 	heights := make([]int, len(values))
 	for i, v := range values {
-		heights[i] = steps / 2
-		if high > low {
-			heights[i] = 1 + int(math.Round((v-low)/(high-low)*float64(steps-1)))
-		}
+		heights[i] = 1 + int(math.Round(min(max(v, 0), 1)*float64(steps-1)))
 	}
 
 	lines := make([]string, rows)

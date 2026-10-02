@@ -565,16 +565,27 @@ func TestResample(t *testing.T) {
 }
 
 func TestSpark(t *testing.T) {
-	// Two rows are sixteen steps: the least shows an eighth of the bottom
-	// row, the greatest fills both, and halfway is just into the top one.
+	// Two rows are sixteen steps: nought shows an eighth of the bottom row,
+	// one fills both, and a half is just into the top one.
 	got := spark([]float64{0, 0.5, 1}, 2)
 	want := []string{" ▁█", "▁██"}
 	if !slices.Equal(got, want) {
 		t.Errorf("spark = %q, want %q", got, want)
 	}
-	// A price that never moved runs across the middle.
+	// The scale is nought to one whatever the prices are: a narrow range
+	// stays narrow, and a price that never moved runs at its own height.
+	if got := spark([]float64{0.4, 0.5}, 2); !slices.Equal(got, []string{" ▁", "▇█"}) {
+		t.Errorf("narrow spark = %q", got)
+	}
 	if got := spark([]float64{0.4, 0.4}, 1); !slices.Equal(got, []string{"▄▄"}) {
 		t.Errorf("flat spark = %q", got)
+	}
+	if got := spark([]float64{0.9, 0.9}, 1); !slices.Equal(got, []string{"▇▇"}) {
+		t.Errorf("flat spark near one = %q", got)
+	}
+	// A value off the scale is drawn at its nearer end.
+	if got := spark([]float64{-0.5, 1.5}, 1); !slices.Equal(got, []string{"▁█"}) {
+		t.Errorf("spark off the scale = %q", got)
 	}
 	if spark(nil, 2) != nil || spark([]float64{1}, 0) != nil {
 		t.Error("spark of nothing, or in no rows, is not nil")

@@ -27,13 +27,17 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - Results of requests go to every screen on the stack, keys only to the top one: a screen must ignore messages that are not its own.
 - A request's message also carries its owner (`owner *browse`): two screens of one kind can be stacked, a sub-tag under its tag.
 - The filter form is hand-rolled (`internal/ui/filter.go`), not huh: a huh `Input` cannot have its cursor blink turned off.
-- An overlay (prompt, form, picker) belongs to the screen that opened it, the help alone to the root: a new one needs a branch in the screen's `typing`, `hints`, `status`, `view` and both halves of `update` (keys, and other messages for a paste).
+- An overlay (prompt, form, picker) belongs to the screen that opened it; the help and the export dialog are the root's: a new one needs a branch in the screen's `typing`, `hints`, `status`, `view` and both halves of `update` (keys, and other messages for a paste).
 - A pane of the market detail (`internal/ui/detail.go`) says "loading…" in words: a `spinner` is a tick that re-arms itself, which hangs `settle`.
 - A request of the detail goes through `detail.request`, which keeps its `CancelFunc`; books are kept per token and histories per token and interval, and `r` drops all but those on show.
 - A table inside a pane is `list.plain()` over fixed-width columns: a column of leftover width under 16 makes the list drop columns.
 - Text of the service's shown outside a list goes through `plainText`: a tab in a description moves the frame.
 - The help has two sets of groups (`helpColumns(market)`), since both do not fit 24 lines: a key of the detail goes in its Market group.
 - The hints in the status bar are the bindings' help, dropped from the right when short of room: keep a binding's help to a word or two.
+- The export dialog and the export under way are the root `Model`'s (`internal/ui/exportdlg.go`): a screen only says what it offers in `exports()`, the dataset most its own first.
+- An `exportScope` copies what it takes from a screen (`slices.Clone`): the export reads it on its own goroutine while the screen goes on changing its rows.
+- A running export reports through `exportJob.updates`, which a command listens on and which closes at the end: that command ends, so it does not hang `settle` as a tick would.
+- What the root says in the status bar (`Model.notice`, the export's row count) gives way to a prompt of the top screen; keep it short enough for 80 columns, the default file name alone being 40.
 - A page is opened through `env.openURL` (`Options.OpenURL`), never `openInBrowser` directly: `newModel` records it on `fakeClient.opened`.
 - New prompts come from `newPrompt` (`internal/ui/tags.go`), which turns the blink off.
 - The filter and sort shared by `ui` and `cli` are `api.Filter` and `api.SortOrders` (`internal/api/filter.go`); a new level copies its parent's filter.
@@ -41,6 +45,7 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - The root command decides whether it has a terminal from `cmd.InOrStdin()`/`cmd.OutOrStdout()`, never `os.Stdout`: `go test` on one package inherits the real terminal.
 - The root command shares `bindFilterFlags` with the exports and checks those flags before it looks for a terminal, so a CLI test can reject them; the `--tag` lookup comes after.
 - The exports about one market (`history`, `trades`, `book`) are `marketDatasets` in `internal/cli/market.go`; every export writes through `write` with the shared `output` flags.
+- The iterators that fetch a market's history and book (`export.HistoryPages`, `export.BookPages`) are shared by `cli` and `ui`: change them there, not in either.
 - `polymarket export` with `-o -` (the default) writes only data: nothing goes to stderr, since a pipe reader such as grid is drawing on that terminal.
 - Export columns are a contract: never rename or reorder one; add at the end and update the goldens.
 
@@ -62,6 +67,10 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - `event()` gives an event two zero-value markets, which pass an open filter and render as rows of `–`; use `market()` and `nominee()` (`browse_test.go`) where the markets are looked at.
 - Under a real tag the list starts a line lower, below the strip of sub-tags: the header is `lines(m)[2]`, or use `headerLine(m)`; `rowLabels` allows for it.
 - `politics(t)` (`internal/ui/browse_test.go`) opens a browser inside Politics, 120 columns wide: at 80 the title bar's note is cut short, so assert a whole note only at 120.
+- An export test moves into a directory of its own with `workDir(t)` (`internal/ui/exportdlg_test.go`) and reads the file back with `wantCells`; the default file name ends in `stamp`.
+- To catch an export under way, take the command from `m.Update(keyMsg("enter"))` without running it: the export starts when the command does, so `esc` or `q` before `settle` is a deterministic cancel.
+- `retype(m, text)` replaces the text of the field in focus (ctrl+u, then the letters).
+- The help of the lists is exactly the 20 lines an 80×24 window has: another binding there needs a group moved to the left column.
 - Tests stop the clock with `newModel` (`Options.Now` = `testNow`); a screen reads the time from `env.now`, never `time.Now`.
 - A `Model` is 80×24 until it gets a `tea.WindowSizeMsg`; rows that tie sort by name as text (`Tag 10` before `Tag 2`).
 - To look at the real thing: `tmux new-session -d -s pm -x 80 -y 24 ./polymarket`, then `tmux send-keys`
@@ -83,4 +92,5 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - `/book` is a 404 for a market that is not trading, and its `last_trade_price` is the same on both outcomes' books: do not show it.
 - `/prices-history` intervals count back from now, so a closed market has points only under `max`; the last point of a live one is the price now, with `resolution_seconds: 0`; an unknown token is an empty page.
 - `/markets/slug/{slug}` is case-sensitive and brings the event; `/markets/{id}` brings neither event nor tags, and 422s on an ID of twelve digits.
+- `include_tag=true` adds about a fifth to a page of `/markets/keyset` (890 KB against 750 KB); the browser asks with it so that loaded markets export with their tags.
 - The Data API refuses a `limit` over its maximum with a 400 (trades 1000, history 10000) where Gamma silently caps it.

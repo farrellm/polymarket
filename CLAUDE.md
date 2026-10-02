@@ -9,6 +9,7 @@ per milestone (§10). Update its status line and record anything the live API co
 - `make smoke` - one request per endpoint against the live API (build tag `live`); not in `check` or CI.
 - `make fixtures` - re-records `testdata/*.json` from the live API via `testdata/record.go`.
 - `golangci-lint run --build-tags live` and `go vet -tags live ./...` - `make check` does not cover `smoke_test.go`.
+- After `go get`, run `go mod tidy` before building: a new bubbles sub-package pulls in modules `go get` leaves out of `go.sum`.
 
 ## Conventions
 
@@ -17,9 +18,13 @@ per milestone (§10). Update its status line and record anything the live API co
 - `perfsprint` rejects `fmt.Sprint` on integers; use `strconv`.
 - No `context.Context` in structs (`containedctx`), test tables included; every API call takes one as a parameter.
 - `errcheck` is on outside `_test.go`: write `_, _ = fmt.Fprintf(w, …)` for courtesy output such as progress.
+- `nilerr` rejects `return nil` on a path where an error is known to be non-nil (`if ctx.Err() != nil { return nil }`); return the error.
 - `api` and `export` must never import Bubble Tea.
 - `ui` screens draw with `list` (`internal/ui/list.go`), not `bubbles/table`: see `DESIGN.md` §2 for why.
 - A `ui` request keeps its context in the closure of its `tea.Cmd` and its `CancelFunc` on the screen; a message carries a generation number, and a stale one is dropped.
+- Results of requests go to every screen on the stack, keys only to the top one: a screen must ignore messages that are not its own.
+- A `textinput` gets its cursor blink turned off (`Styles().Cursor.Blink = false`), and non-key messages are forwarded to it while it is open, or a paste never arrives.
+- The root command decides whether it has a terminal from `cmd.InOrStdin()`/`cmd.OutOrStdout()`, never `os.Stdout`: `go test` on one package inherits the real terminal.
 - `polymarket export` with `-o -` (the default) writes only data: nothing goes to stderr, since a pipe reader such as grid is drawing on that terminal.
 - Export columns are a contract: never rename or reorder one; add at the end and update the goldens.
 
@@ -33,6 +38,8 @@ per milestone (§10). Update its status line and record anything the live API co
   limiter off and the retry pauses recorded rather than slept.
 - UI tests drive `Model.Update` over `fakeClient` (`internal/ui/ui_test.go`): `press` runs a key and
   every command it sets off, `step` runs one round, and assertions read the stripped `View()`.
+- `settle` in the UI tests runs commands until none is left, so a command that re-arms itself (a tick, a blink) hangs the test.
+- A `Model` is 80×24 until it gets a `tea.WindowSizeMsg`; rows that tie sort by name as text (`Tag 10` before `Tag 2`).
 - To look at the real thing: `tmux new-session -d -s pm -x 80 -y 24 ./polymarket`, then `tmux send-keys`
   and `tmux capture-pane -p`. Send `Escape` on its own: followed at once by a key it reads as alt+key.
 
@@ -43,5 +50,7 @@ per milestone (§10). Update its status line and record anything the live API co
 - Always set `order` on the keyset listings: the default is by ID, oldest first.
 - Keyset pages cannot be fetched in parallel (the cursor is opaque) and `limit` above 100 is silently 100.
 - Key tags by ID: the slug embedded in an event can differ in case from the one `/tags/slug/` reports.
+- A page of `/events/keyset` is 9–15 MB: `curl -s -o` it to a file and query it with `jq`; time it with `curl -w '%{time_total}'` (there is no `/usr/bin/time`).
+- `/tags/slug/{slug}` ignores case, 404s on an unknown slug and 422s on one with a space.
 - `/events/keyset` answers an unknown `tag_slug` with an empty page, not an error; check the tag with `Client.Tag` first (`findTag`).
 - Sort fields differ per listing: markets need `volumeNum`/`liquidityNum` (`order=volume` sorts as text). Go through `sortOrders` in `internal/cli/export.go`.

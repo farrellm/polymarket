@@ -2,6 +2,7 @@
 
 Read-only terminal browser for Polymarket, in Go. `DESIGN.md` is the spec: work is done
 per milestone (§10). Update its status line and record anything the live API contradicts.
+A milestone is two commits: the work with its `DESIGN.md` changes, then `Record milestone N learnings in CLAUDE.md`.
 
 ## Commands
 
@@ -16,6 +17,7 @@ per milestone (§10). Update its status line and record anything the live API co
 - `../grid` is the sibling project the tooling and code style come from; copy its patterns.
 - Comments and identifiers use UK spelling (`misspell` locale UK): honour, normalise, colour.
 - `perfsprint` rejects `fmt.Sprint` on integers; use `strconv`.
+- `perfsprint` also rejects `s += …` in a loop, tests included; collect into a slice and `strings.Join`.
 - No `context.Context` in structs (`containedctx`), test tables included; every API call takes one as a parameter.
 - `errcheck` is on outside `_test.go`: write `_, _ = fmt.Fprintf(w, …)` for courtesy output such as progress.
 - `nilerr` rejects `return nil` on a path where an error is known to be non-nil (`if ctx.Err() != nil { return nil }`); return the error.
@@ -25,10 +27,12 @@ per milestone (§10). Update its status line and record anything the live API co
 - Results of requests go to every screen on the stack, keys only to the top one: a screen must ignore messages that are not its own.
 - A request's message also carries its owner (`owner *browse`): two screens of one kind can be stacked, a sub-tag under its tag.
 - The filter form is hand-rolled (`internal/ui/filter.go`), not huh: a huh `Input` cannot have its cursor blink turned off.
+- An overlay (prompt, form, picker) belongs to the screen that opened it, the help alone to the root: a new one needs a branch in the screen's `typing`, `hints`, `status`, `view` and both halves of `update` (keys, and other messages for a paste).
 - New prompts come from `newPrompt` (`internal/ui/tags.go`), which turns the blink off.
 - The filter and sort shared by `ui` and `cli` are `api.Filter` and `api.SortOrders` (`internal/api/filter.go`); a new level copies its parent's filter.
 - A `textinput` gets its cursor blink turned off (`Styles().Cursor.Blink = false`), and non-key messages are forwarded to it while it is open, or a paste never arrives.
 - The root command decides whether it has a terminal from `cmd.InOrStdin()`/`cmd.OutOrStdout()`, never `os.Stdout`: `go test` on one package inherits the real terminal.
+- The root command shares `bindFilterFlags` with the exports and checks those flags before it looks for a terminal, so a CLI test can reject them; the `--tag` lookup comes after.
 - `polymarket export` with `-o -` (the default) writes only data: nothing goes to stderr, since a pipe reader such as grid is drawing on that terminal.
 - Export columns are a contract: never rename or reorder one; add at the end and update the goldens.
 
@@ -44,6 +48,8 @@ per milestone (§10). Update its status line and record anything the live API co
   every command it sets off, `step` runs one round, and assertions read the stripped `View()`.
 - `settle` in the UI tests runs commands until none is left, so a command that re-arms itself (a tick, a blink) hangs the test.
 - `fakeClient.Events` narrows its pages by `TagID` and `TitleSearch` as the service would; the other listings are handed out as they are.
+- `event()` gives an event two zero-value markets, which pass an open filter and render as rows of `–`; use `market()` and `nominee()` (`browse_test.go`) where the markets are looked at.
+- Under a real tag the list starts a line lower, below the strip of sub-tags: the header is `lines(m)[2]`, or use `headerLine(m)`; `rowLabels` allows for it.
 - `politics(t)` (`internal/ui/browse_test.go`) opens a browser inside Politics, 120 columns wide: at 80 the title bar's note is cut short, so assert a whole note only at 120.
 - Tests stop the clock with `newModel` (`Options.Now` = `testNow`); a screen reads the time from `env.now`, never `time.Now`.
 - A `Model` is 80×24 until it gets a `tea.WindowSizeMsg`; rows that tie sort by name as text (`Tag 10` before `Tag 2`).

@@ -1,6 +1,6 @@
 // Package ui is the terminal browser: a stack of screens that drills down
-// from tags to events to markets, each drawn inside one frame with a
-// breadcrumb above it and a status bar below.
+// from tags to events to markets to one market in detail, each drawn inside
+// one frame with a breadcrumb above it and a status bar below.
 //
 // Nothing here blocks: every request runs in a tea.Cmd and comes back as a
 // message.
@@ -23,9 +23,13 @@ type Client interface {
 	Events(ctx context.Context, q api.EventsQuery) (events []api.Event, next string, err error)
 	Markets(ctx context.Context, q api.MarketsQuery) (markets []api.Market, next string, err error)
 	Event(ctx context.Context, id string) (*api.Event, error)
+	Market(ctx context.Context, id string) (*api.Market, error)
 	Tag(ctx context.Context, slug string) (*api.Tag, error)
 	RelatedTags(ctx context.Context, slug string) ([]api.Tag, error)
 	Search(ctx context.Context, q api.SearchQuery) (*api.SearchResult, error)
+	Book(ctx context.Context, tokenID string) (*api.Book, error)
+	PriceHistory(ctx context.Context, q api.HistoryQuery) (points []api.PricePoint, next string, err error)
+	Trades(ctx context.Context, q api.TradesQuery) (trades []api.Trade, next string, err error)
 }
 
 // Options are what the browser is opened on.
@@ -37,6 +41,9 @@ type Options struct {
 	Filter api.Filter
 	// Now is the clock the end dates are measured against; nil is time.Now.
 	Now func() time.Time
+	// OpenURL shows a page of polymarket.com; nil hands it to the system's
+	// browser.
+	OpenURL func(url string) error
 }
 
 // env is what every screen is built with.
@@ -45,6 +52,8 @@ type env struct {
 	keys   keyMap
 	st     styles
 	now    func() time.Time
+	// openURL shows a page in the user's browser.
+	openURL func(url string) error
 }
 
 // screen is one level of the browser.
@@ -117,9 +126,12 @@ func New(client Client, o Options) *Model {
 		width:  80,
 		height: 24,
 	}
-	e := env{client: client, keys: m.keys, st: m.st, now: o.Now}
+	e := env{client: client, keys: m.keys, st: m.st, now: o.Now, openURL: o.OpenURL}
 	if e.now == nil {
 		e.now = time.Now
+	}
+	if e.openURL == nil {
+		e.openURL = openInBrowser
 	}
 	filter := o.Filter
 	if filter.Order.Name == "" {
@@ -255,7 +267,8 @@ func (m *Model) View() tea.View {
 	lines = append(lines, m.titleBar())
 	content := m.top().view()
 	if m.help {
-		content = helpView(m.keys, m.st, inner)
+		_, market := m.top().(*detail)
+		content = helpView(m.keys, m.st, inner, market)
 	}
 	body := strings.Split(content, "\n")
 	for i := range m.bodyHeight() {
@@ -294,10 +307,24 @@ func (m *Model) titleBar() string {
 		}
 		crumbs[i] = style.Render(s.crumb())
 	}
-	head := m.st.border.Render("┌") + " " + m.st.app.Render("polymarket") + " " +
-		m.st.border.Render("─") + " " + strings.Join(crumbs, crumbSeparator) + " "
-	if tabs := m.top().tabs(); tabs != "" {
-		head += m.st.border.Render("─") + " " + tabs + " "
+	lead := m.st.border.Render("┌") + " " + m.st.app.Render("polymarket") + " " + m.st.border.Render("─") + " "
+	tabs := ""
+	if t := m.top().tabs(); t != "" {
+		tabs = m.st.border.Render("─") + " " + t + " "
+	}
+	// Four levels down the breadcrumb is wider than a narrow window: the
+	// levels furthest up give way, so that where one is and the tabs there
+	// stay in view.
+	head := ""
+	for skip := range crumbs {
+		trail := strings.Join(crumbs[skip:], crumbSeparator)
+		if skip > 0 {
+			trail = m.st.crumb.Render("…") + crumbSeparator + trail
+		}
+		head = lead + trail + " " + tabs
+		if width(head) < m.width {
+			break
+		}
 	}
 	corner := m.st.border.Render("┐")
 

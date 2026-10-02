@@ -13,17 +13,24 @@ type helpGroup struct {
 }
 
 // helpColumns are the help's two columns of groups. They are built from the
-// bindings themselves, so the help cannot disagree with what a key does.
-func (k keyMap) helpColumns() [2][]helpGroup {
+// bindings themselves, so the help cannot disagree with what a key does. On
+// a market the keys of its detail take the place of the lists', which do
+// nothing there: both do not fit the smallest window.
+func (k keyMap) helpColumns(market bool) [2][]helpGroup {
+	moving := helpGroup{"Moving", []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp, k.HalfDown, k.Top, k.Bottom}}
+	general := helpGroup{"", []key.Binding{k.Help, k.Quit, k.Interrupt}}
+	if market {
+		return [2][]helpGroup{
+			{moving, {"Levels", []key.Binding{k.Back, k.Tags}}},
+			{{"Market", []key.Binding{k.About, k.Interval, k.Refresh, k.Browse, k.Copy, k.CopyID}}, general},
+		}
+	}
 	return [2][]helpGroup{
-		{
-			{"Moving", []key.Binding{k.Up, k.Down, k.PageUp, k.PageDown, k.HalfUp, k.HalfDown, k.Top, k.Bottom}},
-			{"Levels", []key.Binding{k.Open, k.Back, k.Tags, k.Tab}},
-		},
+		{moving, {"Levels", []key.Binding{k.Open, k.Back, k.Tags, k.Tab}}},
 		{
 			{"Lists", []key.Binding{k.Find, k.Search, k.Filter, k.SubTag, k.Sort, k.Reverse, k.Refresh}},
 			{"Filter form", []key.Binding{k.Next, k.Previous, k.Right, k.Apply, k.Cancel}},
-			{"", []key.Binding{k.Help, k.Quit, k.Interrupt}},
+			general,
 		},
 	}
 }
@@ -33,13 +40,14 @@ func (k keyMap) closeHelp() key.Binding {
 	return key.NewBinding(key.WithKeys("esc"), key.WithHelp("any key", "back"))
 }
 
-// helpView lists every key, in two columns.
-func helpView(k keyMap, st styles, w int) string {
+// helpView lists the keys, in two columns: those of a market's detail if
+// that is what is on show, else those of the lists.
+func helpView(k keyMap, st styles, w int, market bool) string {
 	const keyWidth = 10
 	half := max(w/2, 1)
 
 	var columns [2][]string
-	for i, groups := range k.helpColumns() {
+	for i, groups := range k.helpColumns(market) {
 		for _, g := range groups {
 			if len(columns[i]) > 0 {
 				columns[i] = append(columns[i], "")

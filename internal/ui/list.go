@@ -176,6 +176,21 @@ func (l *list) view() string {
 	return b.String()
 }
 
+// plain renders the header and as many rows from the first as fit, with no
+// cursor: a table that is only read, as the panes of a market are.
+func (l *list) plain() []string {
+	cols := l.layout()
+	titles := make([]string, len(cols))
+	for i, c := range cols {
+		titles[i] = c.title
+	}
+	lines := []string{l.st.header.Render(l.line(cols, titles, " "))}
+	for i := range min(len(l.rows), l.pageSize()) {
+		lines = append(lines, l.line(cols, l.rows[i], " "))
+	}
+	return lines
+}
+
 // line lays one row's cells out under the columns.
 func (l *list) line(cols []column, cells []string, marker string) string {
 	var b strings.Builder

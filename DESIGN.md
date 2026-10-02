@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level) and 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) implemented; the rest is design. `enter` on a market does nothing yet but say so, and an event with one market opens a list of one, until milestone 6 adds the detail. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup and the search on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) implemented; the rest is design: the export dialog behind `e`, and the README. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history and the trades on 2026-10-02.
 
 ## 1. Summary
 
@@ -25,7 +25,7 @@ Same baseline as grid (`go 1.26.6` in go.mod; fang + cobra entry point; Bubble T
 | Module | Version | Used for |
 |---|---|---|
 | `charm.land/bubbletea/v2` | v2.0.10 | program loop, messages, commands |
-| `charm.land/bubbles/v2` | v2.2.1 | `textinput`, `viewport`, `spinner`, `progress`, `help`, `key` |
+| `charm.land/bubbles/v2` | v2.2.1 | `textinput`, `viewport`, `key`; `progress` for the export dialog (milestone 7) |
 | `charm.land/lipgloss/v2` | v2.0.6 | layout, borders, colour, tabs |
 | `charm.land/huh/v2` | v2.0.3 | the export dialog (milestone 7; not yet a dependency) |
 | `charm.land/log/v2` | v2.0.1 | `--debug` log file (never the screen) |
@@ -34,8 +34,14 @@ Same baseline as grid (`go 1.26.6` in go.mod; fang + cobra entry point; Bubble T
 
 No Polymarket SDK: the read endpoints are plain JSON over HTTPS and a hand-written client
 of a few hundred lines is easier to test and keeps trading/signing code out of the binary.
-The price sparkline is hand-rolled (block characters, ~60 lines) rather than pulling in a
-chart library.
+The price sparkline is hand-rolled (block characters, `ui/spark.go`, ~90 lines) rather
+than pulling in a chart library. It is several lines tall, an eighth of a cell to a step,
+scaled from the lowest price of the interval to the highest.
+
+The panes of the market detail say "loading…" in words where a `spinner` was the plan,
+for the reason the filter form gives below: a spinner is a timer that redraws the screen
+for as long as it is up. The help is built from the key map by hand as well, in two
+columns, rather than with `bubbles/help`.
 
 The lists are hand-rolled too (`ui/list.go`, ~190 lines) rather than `bubbles/table`,
 which was the plan. That table leaves the cursor outside its window when the cursor is
@@ -60,6 +66,7 @@ main.go                     calls cli.Execute(ctx); exit 1 on error
 internal/cli/               root command (TUI), `export` subcommand, flags, version var
     root.go                 root command, global flags, the API client they describe
     export.go               `export <dataset>`: flags -> filter -> listing -> export
+    market.go               the datasets about one market: history, trades, book
 internal/api/               HTTP client for the three services
     client.go               base URLs, http.Client, limiter, retry, decode, User-Agent
     gamma.go                events, markets, tags, search
@@ -82,7 +89,9 @@ internal/ui/                Bubble Tea models
     picker.go               the sub-tag picker
     help.go                 the help, built from the key map
     keys.go style.go
-    detail.go spark.go      to come: one market (summary, book, sparkline, trades)
+    detail.go               one market: outcomes, chart, book, trades; the About tab
+    spark.go                the chart: a price history resampled into block characters
+    open.go                 handing a page to the system's browser
     exportdlg.go            to come: export dialog + progress
 testdata/                   recorded API responses; golden/ holds the golden CSVs
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
@@ -107,14 +116,15 @@ All endpoints are public and unauthenticated. Three services:
 |---|---|
 | `GET /events/keyset` | `limit` (max 100), `order`, `ascending`, `after_cursor`, `closed`, `tag_id`/`tag_slug`, `title_search`, `volume_min`, `liquidity_min`, `end_date_min/max`. Returns `{events, next_cursor}`; each event embeds its `markets` and `tags`. The browser asks by `tag_id`, the exports by `tag_slug`. |
 | `GET /markets/keyset` | Same paging; `closed`, `tag_id`, `volume_num_min`, `liquidity_num_min`, `end_date_min/max`, `include_tag`. Returns `{markets, next_cursor}`. No text-search parameter. |
-| `GET /events/{id}`, `GET /markets/{id}` | refresh one item |
+| `GET /events/{id}`, `GET /markets/{id}` | refresh one item. A market fetched this way carries neither its event nor its tags |
+| `GET /markets/slug/{slug}` | the market `--market` names by its slug, with a summary of its event (no tags) |
 | `GET /tags/slug/{slug}` | resolve a tag typed by name (`--tag`, or a tag outside the ranked set) |
 | `GET /tags/slug/{slug}/related-tags/tags` | `status=active`, `omit_empty=true`; ranked sub-tags of a tag (politics → Trump, Midterms, Senate Elections, …) |
 | `GET /tags` | plain array of `{id,label,slug}`, `limit` ≤ 100 with `offset`. **Not used for the tag level** — see below |
 | `GET /public-search?q=` | `limit_per_type` (silently at most 50), `page` (from 1), `events_status` (`active` or `resolved`), `events_tag` (a slug; an ID matches nothing); returns `{events, pagination:{hasMore,totalResults}}`, with no `events` member at all when nothing matches |
 | `GET clob/book?token_id=` | `bids`, `asks` (`{price,size}` strings), `tick_size`, `min_order_size`, `last_trade_price`, `timestamp` |
 | `GET data/v2/prices-history?token_id=` | `interval` = `1h`/`6h`/`1d`/`1w`/`1m`/`max`, or `start`/`end` epoch seconds (a range of at most 15 days, else 400); `bucket_seconds`; `limit` ≤ 10000, `cursor`. Returns `{data:[{timestamp,price,resolution_seconds}], pagination}` |
-| `GET data/v2/trades?condition=` | `limit` ≤ 1000, `cursor`, `start`, `end`, `side`. Returns `{data:[…], pagination:{has_more,next_cursor}}` |
+| `GET data/v2/trades?condition=` | `limit` ≤ 1000 (more is a 400), `cursor`, `start`, `end`, `side`. Returns `{data:[…], pagination:{has_more,next_cursor}}`, newest first, the trades of every outcome of the market together |
 
 ### Where the tag list comes from
 
@@ -187,6 +197,28 @@ of those.
   given. An unknown `events_status` is ignored rather than refused. The status is the
   event's: an open event is returned with its closed markets too (about a third of the
   markets in a page for "trump"), so the markets are filtered again on arrival.
+- `/markets/slug/{slug}` matches the slug in the case it is written in (a tag's lookup
+  ignores case), and answers an unknown one with 404. `/markets/{id}` answers an unknown ID
+  with 404 too, but one of too many digits (twelve) with 422 ("id is invalid"), as the
+  slug lookup does a slug with a space. A market is named by its ID if the name is all
+  digits and by its slug otherwise, and a 422 is reported as no such market.
+- A market's `bestBid`, `bestAsk`, `lastTradePrice` and `oneDayPriceChange` are of its
+  **first outcome**. The second outcome of two is the same book from the other side: its
+  bid is one minus the first's ask (checked against both books of a live market). The
+  book's own `last_trade_price` is not per outcome: both books of a market report the same
+  figure, so it is not shown.
+- A closed market is still sent with the bid, ask and price change of its last hours; has
+  **no book** at all (`/book` is a 404, "No orderbook exists"); and has no price history
+  under any `interval` but `max`, the intervals being measured back from now. Its trades
+  are all there.
+- `/prices-history` with an `interval` and no `limit` returns the whole interval in one
+  page (the default limit is 10000, and the service spaces the points to suit: 60 s for
+  `1h`, `6h` and `1d`, 300 s for `1w`, 1800 s for `1m`, 43200 s for `max`, a couple of
+  thousand points at most). The last point of a market that is trading is the price now,
+  with `resolution_seconds: 0`. An unknown `token_id` is an empty page, not an error; an
+  unknown `interval`, or none, is a 400.
+- A description may hold tabs and carriage returns, which would move the frame: they are
+  taken out before it is shown.
 - Token IDs are 77-digit decimals: keep them as strings everywhere, including CSV.
 - Identifiers differ per service: Gamma `id`/`slug`, CLOB `token_id` (per outcome), Data
   API `condition` (= `conditionId`, per market).
@@ -259,18 +291,73 @@ Tags  ▸  Events (in a tag)  ▸  Markets (in an event)  ▸  Market detail
    level needs no request: it sorts, filters and searches the markets in hand, under
    their short names (`groupItemTitle`), and `r` fetches the event again
    (`/events/{id}`). A market with no figure for the field sorted by goes last either
-   way round. Single-market events skip straight to detail (milestone 6; until then
-   they open a list of one).
-4. **Market detail** — summary header (question, state, end date, volumes), then panes:
-   outcomes with bid/ask/last/spread; order book depth (top N levels each side); price
-   sparkline with `1d/1w/1m/max` cycling; recent trades. The description sits in a
-   `viewport`. Each pane loads independently and shows its own spinner or error.
+   way round. An event with a single market skips this level: `enter` on it opens the
+   market's detail.
+4. **Market detail** — two tabs. **Market**: the question; a line of facts (state, end
+   date, volumes); the outcomes with price, bid, ask, spread, last trade and 24 h change;
+   the price chart of the outcome under the cursor, `i` cycling `1d/1w/1m/max`; and, side
+   by side, that outcome's order book (as many levels each side as there are lines for)
+   and the market's latest trades. **About**: what identifies the market (event, dates,
+   tick size, slug, condition ID, URL) and its description, wrapped, in a `viewport` the
+   movement keys scroll.
+
+   ```
+   ┌ polymarket ─ … ▸ Flávio Bolsonaro ─ [Market] About ──────────────────────────┐
+   │ Will Flávio Bolsonaro win the 2026 Brazilian presidential election?          │
+   │ open · ends 2026-10-05 (2d) · vol 24h $729K · volume $13.4M · liq $642K      │
+   │                                                                              │
+   │ Outcome                        Price     Bid     Ask  Spread    Last   24h Δ │
+   │▸Yes                            56.0¢   56.0¢   56.1¢    0.1¢   56.1¢   -5.8¢ │
+   │ No                             44.0¢   43.9¢   44.0¢    0.1¢   43.9¢   +5.8¢ │
+   │                                                                              │
+   │ Price of Yes · 1w  56.2¢  0.0¢  low 54.5¢ · high 63.6¢                       │
+   │                                                         ▁▂▆▆█▇▆▆▄▅▄▂         │
+   │                        ▁▁▁▁    ▁▁▁▁▁▁▁▁▁▁▁▇▆▆▆▂▃▅▅▅▆████████████████▇██ ▂    │
+   │ ▂▂▇▆▄▄▄▄▄▄▄▄▄▄▇▇▇▇▇▇▇▇███████▆▇████████████████████████████████████████▅█▃▁▄ │
+   │                                                                              │
+   │ Book · Yes · 12:30:43             Trades                                     │
+   │   Size     Bid     Ask    Size    Time         Side  Outcome   Price  Shares │
+   │    959   56.1¢   56.3¢    1.0K    12:29:47     SELL  No        43.9¢      70 │
+   │    300   56.0¢   56.4¢   11.0K    12:28:11     BUY   Yes       56.1¢     128 │
+   │ …                                                                            │
+   ├──────────────────────────────────────────────────────────────────────────────┤
+   │        tab about  i interval  r refresh  o website  h help  esc back  q quit │
+   └──────────────────────────────────────────────────────────────────────────────┘
+   ```
+
+   The market is the one the list held, so the screen is drawn at once and asks for
+   nothing about the market itself. The outcomes' quotes are the market's own (§4): the
+   first outcome's as sent, the second of two mirrored from it, and none for an outcome
+   beyond those or for a market that has closed, which keeps only its last trade. The
+   chart, the book and the trades are a request each (`/prices-history` with an
+   `interval`, `/book`, `/trades` with `limit=50`), each pane saying for itself that it is
+   loading or what went wrong while the others stand. A book or a history once fetched is
+   kept, so moving the cursor back to an outcome, or the interval round to one seen, asks
+   for nothing. `r` fetches the market again (`/markets/{id}`, keeping the event it was
+   opened under) with the trades and the book and history on show; the rest is dropped
+   and fetched when next looked at. A closed market starts on `max`, having no prices
+   under a shorter interval, and its book pane says that it is not trading.
+
+   The chart resamples the history by time into one column per character: each column
+   takes the last price at or before its end. It is drawn from the lowest price of the
+   interval to the highest, which the title states with the price now and the change
+   over the interval. The room under the outcomes is split a third to the chart (eight
+   lines at most) and the rest to the two tables. Trades are dated in the terminal's time
+   zone: the time for one of today, the day and the time for one of this year, else the
+   date.
+
+   `o` opens the market's page with the system's opener (`xdg-open`, `open`,
+   `rundll32`), `y` copies its slug and `Y` its condition ID, through the terminal
+   (OSC 52).
 
 **Overlays** — help (generated from the key map, as in grid), filter form, sub-tag
 picker, export dialog. Each takes the place of the list inside the frame rather than
-floating over it. The title bar's note leads with the sort and follows it with the
-search and the filter; too long for the bar, it loses its end, then goes altogether
-before the breadcrumb is cut.
+floating over it. The help lists the keys of the lists, or, on a market, those of its
+detail in their place: both together do not fit 24 lines. The title bar's note leads
+with the sort and follows it with the search and the filter; too long for the bar, it
+loses its end, then goes altogether before the breadcrumb is cut. A breadcrumb too long
+with the tabs after it loses its upper levels first (`… ▸ Nominee 2028 ▸ Bob`), so that
+where one is, and the tabs there, stay in view.
 
 ### Keys
 
@@ -281,15 +368,16 @@ Follows grid where the meaning carries over.
 | `↑ ↓ pgup pgdn space d u g G` | move, as in grid |
 | `enter` / `esc` | down a level / back up |
 | `T` | jump back to the Tags level from anywhere |
-| `tab` | switch Events / Markets within a tag |
+| `tab` | switch Events / Markets within a tag, Market / About on a market |
 | `/` | Tags: narrow by name. Events/Markets: search (server-side, on `enter`) |
 | `f` | filter form: open/closed/all, min volume, min liquidity, ends before/after |
 | `t` | sub-tag picker for the current tag (type to narrow) |
 | `s` / `S` | cycle the sort (24 h, week, month and total volume, liquidity, end, start) / flip direction |
+| `i` | on a market: cycle the chart's interval (`1d`, `1w`, `1m`, `max`) |
 | `r` | refresh |
-| `e` | export |
-| `o` | open the market on polymarket.com |
-| `y` | copy slug / condition ID |
+| `e` | export (milestone 7) |
+| `o` | on a market: open it on polymarket.com |
+| `y` / `Y` | on a market: copy its slug / its condition ID |
 | `h` `?` | help |
 | `q` `ctrl+c` | quit |
 
@@ -330,7 +418,8 @@ Follows grid where the meaning carries over.
   stacked, a sub-tag under its tag) and generation. A screen answers a message with a
   command and a `nav` (push this screen, or pop), which only the top one may use.
 - All I/O happens in `tea.Cmd`s returning typed messages (`pageMsg`, `bookMsg`,
-  `historyMsg`, `tradesMsg`, `exportProgressMsg`, `errMsg`). `Update` never blocks.
+  `historyMsg`, `tradesMsg`, `marketMsg`, `exportProgressMsg`), an error being a field of
+  the message it would have been. `Update` never blocks.
 - Each request carries a generation number; a response whose generation is stale (the
   user changed sort, filter or screen meanwhile) is dropped. Each screen holds a
   `context.CancelFunc` for its in-flight requests and calls it on leaving.
@@ -354,9 +443,9 @@ Follows grid where the meaning carries over.
 | `markets` | browse list (Markets tab, or an event's markets), scoped to the current tag | market |
 | `events` | browse list (Events tab), scoped to the current tag | event |
 | `outcomes` | same as `markets`, long layout | market × outcome |
-| `history` | `/v2/prices-history` for the open market | outcome × timestamp |
-| `trades` | `/v2/trades` for the open market | trade |
-| `book` | `/book` snapshot for the open market | outcome × side × price level |
+| `history` | `/v2/prices-history` for one market | outcome × timestamp |
+| `trades` | `/v2/trades` for one market | trade |
+| `book` | `/book` snapshot for one market | outcome × side × price level |
 
 ### In the TUI
 
@@ -405,7 +494,26 @@ Flags map one-to-one onto the TUI's filter state, and both paths call the same
 around it. `Options` carries the row limit, `Raw` and the progress callback; the result is
 a `Summary{Rows, Capped, Notes}`. A `Dataset` is built from an iterator of pages
 (`export.Markets(pages)`), which is `api.Pages(…)` for "all matching" and
-`export.Loaded(rows)` for the rows on screen.
+`export.Loaded(rows)` for the rows on screen. The datasets about a market are built the
+same way: `export.Trades` from pages of trades, `export.History` from pages of
+`Series{Market, Outcome, Points}` and `export.Book` from `Depth{Market, Outcome, Book}`,
+so that the browser can hand over what it holds and the command line an iterator that
+fetches as it goes.
+
+The datasets about one market (`history`, `trades`, `book`) take none of those but the
+last three, and name their market instead:
+
+| Flag | Meaning |
+|---|---|
+| `--market REF` | the market, by its slug or, if all digits, its ID (required); an unknown one is an error |
+| `--outcome NAME` | `history`, `book`: only this outcome, by its label (`yes`, any case) or its index from 0; the default is every outcome, one after another |
+| `--interval I` | `history`: `1h`, `6h`, `1d`, `1w`, `1m` or `max`; the default is `max` |
+| `--since`, `--until` | `trades`: a date or a timestamp, as `--ends-after` takes |
+
+`history` pages each outcome to its end (10000 points a page) before starting the next;
+`trades` pages newest first (1000 a page); `book` is one request per outcome, and an
+error if the market has no book, which is to say is not trading, rather than a file of
+headers. A market that has not opened has no tokens to ask about, and says so.
 
 `--search` does what `/` does in the browser. On `events` it is one more parameter of the
 listing, and everything else still applies. On `markets` and `outcomes` it goes through
@@ -436,6 +544,18 @@ rather than quietly dropped.
 - `outcomes` columns: `market_id, market_slug, question, event_id, event_slug,
   event_title, condition_id, active, closed, end_date, outcome_index, outcome, price,
   token_id`. `outcome_index` counts from 0, as the Data API's trades do.
+- `history` columns: `market_id, market_slug, question, condition_id, outcome_index,
+  outcome, token_id, timestamp, price, resolution_seconds`. Each outcome's rows are
+  oldest first. `resolution_seconds` is the width of the bucket the price stands for, and
+  0 on the last row of an outcome still trading: its price now.
+- `trades` columns: `timestamp, condition_id, market_slug, event_slug, question, side,
+  outcome_index, outcome, token_id, price, size, proxy_wallet, name, pseudonym,
+  transaction_hash`. `side` is the taker's (`BUY`, `SELL`) and `size` is in shares. Every
+  cell is the trade's own, so the dataset needs no market beside it.
+- `book` columns: `market_id, market_slug, question, condition_id, outcome_index, outcome,
+  token_id, timestamp, side, level, price, size`. `side` is `bid` or `ask`, an outcome's
+  bids before its asks; `level` counts from 1 at the best price of a side; `timestamp` is
+  the snapshot's.
 - Every column has a kind (text, number, bool, time). The client parses numbers on the
   way in (`api.Float`), so they are written back in their shortest round-tripping form
   rather than byte for byte.
@@ -520,9 +640,11 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   so a test can run every command a key sets off (`settle`) or one round at a time
   (`step`); tag aggregation from a fixture page; drill down and back up restoring the
   cursor; stale-generation responses dropped; paging trigger; resize down to 80×24 and
-  below.
-- `internal/cli`: flag parsing to filter state; completion for dataset and `--order`; the
-  export commands end to end against an `httptest` stand-in for Gamma.
+  below; the market detail over recorded books, histories and trades: one request per
+  pane, the cache per outcome and interval, each pane failing alone, a refresh overtaken.
+- `internal/cli`: flag parsing to filter state; completion for dataset, `--order` and
+  `--interval`; the export commands end to end against an `httptest` stand-in for the
+  three services.
 - `make smoke` (build tag `live`): one request per endpoint, asserting only shape, to catch
   API drift. Run by hand, not in CI.
 

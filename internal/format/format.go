@@ -27,6 +27,21 @@ func Money(v float64) string {
 	if v < 0 {
 		sign, v = "-", -v
 	}
+	return sign + "$" + scaled(v)
+}
+
+// Quantity renders a number of shares the way Money renders dollars, without
+// the sign of one: 950, 9.8K, 291K.
+func Quantity(v float64) string {
+	sign := ""
+	if v < 0 {
+		sign, v = "-", -v
+	}
+	return sign + scaled(v)
+}
+
+// scaled renders a figure that is not negative in at most five characters.
+func scaled(v float64) string {
 
 	// A value that would round to 1000 of a unit belongs to the next one:
 	// $999.6K is $1.0M, not $1000K.
@@ -38,12 +53,12 @@ func Money(v float64) string {
 
 	// The same goes for the decimal place: 99.96 would print as 100.0.
 	const oneDecimalBelow = 99.95
-	scaled := v / moneyUnits[u].size
+	in := v / moneyUnits[u].size
 	decimals := 0
-	if u > 0 && scaled < oneDecimalBelow {
+	if u > 0 && in < oneDecimalBelow {
 		decimals = 1
 	}
-	return sign + "$" + strconv.FormatFloat(scaled, 'f', decimals, 64) + moneyUnits[u].suffix
+	return strconv.FormatFloat(in, 'f', decimals, 64) + moneyUnits[u].suffix
 }
 
 // Price renders a price between 0 and 1 in cents, to the tenth of a cent the
@@ -93,4 +108,17 @@ func Until(t, now time.Time) string {
 		}
 	}
 	return "now"
+}
+
+// Clock renders the moment of something recent, in now's time zone: the time
+// of day if it was today, else the day and the time to the minute.
+func Clock(t, now time.Time) string {
+	t = t.In(now.Location())
+	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
+		return t.Format("15:04:05")
+	}
+	if t.Year() == now.Year() {
+		return t.Format("Jan 2 15:04")
+	}
+	return t.Format(time.DateOnly)
 }

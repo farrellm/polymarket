@@ -13,13 +13,24 @@ import (
 )
 
 // market is an open market with one price, its change over a day and its
-// volume over one. short is its name within its event.
+// volume over one. short is its name within its event. It is quoted a cent
+// either side of its price, and its slug, condition ID and tokens are named
+// after its ID.
 func market(id, question, short string, price, change, volume24h float64) api.Market {
 	return api.Market{
-		ID:             id,
-		Question:       question,
-		GroupItemTitle: short,
-		Outcomes:       []api.Outcome{{Label: "Yes", Price: amount(price)}, {Label: "No", Price: amount(1 - price)}},
+		ID:              id,
+		Slug:            "slug-" + id,
+		ConditionID:     "0x" + id,
+		Question:        question,
+		GroupItemTitle:  short,
+		AcceptingOrders: true,
+		Outcomes: []api.Outcome{
+			{Label: "Yes", Price: amount(price), TokenID: id + "-yes"},
+			{Label: "No", Price: amount(1 - price), TokenID: id + "-no"},
+		},
+		BestBid:        amount(price - 0.01),
+		BestAsk:        amount(price + 0.01),
+		LastTradePrice: amount(price),
 		Change1d:       amount(change),
 		Volume24h:      amount(volume24h),
 		Volume:         amount(volume24h * 10),
@@ -32,6 +43,7 @@ func market(id, question, short string, price, change, volume24h float64) api.Ma
 // closed, and one that has never traded and so has no figures at all.
 func nominee() api.Event {
 	e := event("Nominee 2028", 500, 5000, "Politics")
+	e.Slug = "nominee-2028"
 	e.EndDate = api.Time{Time: testNow.Add(800 * 24 * time.Hour)}
 	shut := market("m3", "Will Cy win?", "Cy", 0, 0, 900)
 	shut.Closed = true
@@ -213,12 +225,15 @@ func TestTabsKeepTheirOwnRows(t *testing.T) {
 	}
 	wantContains(t, "cursor row", cursorLine(t, m), "Election")
 
-	// A market's detail is a level that is not there yet.
+	// A market in the list opens on its detail, under its question.
 	press(m, "tab", "enter")
-	if len(m.stack) != 2 {
-		t.Errorf("stack is %d deep after enter on a market, want 2", len(m.stack))
+	if len(m.stack) != 3 {
+		t.Errorf("stack is %d deep after enter on a market, want 3", len(m.stack))
 	}
-	wantContains(t, "status bar", statusLine(m), "not there yet")
+	wantContains(t, "title bar", lines(m)[0], "Tags ▸ Politics ▸ Will Bob win? ─ [Market] About")
+	press(m, "esc")
+	wantContains(t, "title bar", lines(m)[0], "Events [Markets]")
+	wantContains(t, "cursor row", cursorLine(t, m), "Will Bob win?")
 }
 
 func TestSearchOfEvents(t *testing.T) {

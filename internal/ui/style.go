@@ -5,6 +5,9 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/farrellm/polymarket/internal/api"
+	"github.com/farrellm/polymarket/internal/format"
 )
 
 // styles is every style the browser draws with.
@@ -47,6 +50,22 @@ func newStyles() styles {
 		up:       lipgloss.NewStyle().Foreground(lipgloss.Green),
 		down:     lipgloss.NewStyle().Foreground(lipgloss.Red),
 	}
+}
+
+// delta renders a change in price with its sign, green for a rise and red
+// for a fall, and the stand-in for a change the service did not send.
+func (st styles) delta(f api.Float) string {
+	if !f.Valid {
+		return missing
+	}
+	text := format.Delta(f.Value)
+	switch {
+	case f.Value > 0:
+		return st.up.Render(text)
+	case f.Value < 0:
+		return st.down.Render(text)
+	}
+	return text
 }
 
 // width is the number of terminal columns s takes, styling aside.

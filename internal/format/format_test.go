@@ -86,3 +86,42 @@ func TestUntil(t *testing.T) {
 		}
 	}
 }
+
+func TestQuantity(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want string
+	}{
+		{0, "0"},
+		{5.21, "5"},
+		{950, "950"},
+		{9_800, "9.8K"},
+		{291_246.63, "291K"},
+		{31_015_550.64, "31.0M"},
+		{-1500, "-1.5K"},
+	}
+	for _, c := range cases {
+		if got := Quantity(c.in); got != c.want {
+			t.Errorf("Quantity(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestClock(t *testing.T) {
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		at   time.Time
+		want string
+	}{
+		{now.Add(-90 * time.Second), "11:58:30"},
+		{now.Add(-13 * time.Hour), "Oct 1 23:00"},
+		{now.AddDate(-1, 0, 0), "2025-10-02"},
+		// The zone is the clock's, whatever the moment came in.
+		{now.Add(-time.Hour).In(time.FixedZone("east", 5*3600)), "11:00:00"},
+	}
+	for _, c := range cases {
+		if got := Clock(c.at, now); got != c.want {
+			t.Errorf("Clock(%v) = %q, want %q", c.at, got, c.want)
+		}
+	}
+}

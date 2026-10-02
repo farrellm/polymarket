@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -125,6 +126,32 @@ func TestLive(t *testing.T) {
 		}
 	})
 
+	// What `export --market` rests on: a slug finds the market, with its
+	// event, only in the case it is written in, and a number finds it by ID.
+	t.Run("market by slug", func(t *testing.T) {
+		m, err := c.FindMarket(ctx, market.Slug)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.ID != market.ID || len(m.Events) != 1 || m.Events[0].Slug != event.Slug {
+			t.Errorf("market = %s in %+v, want %s in %s", m.ID, m.Events, market.ID, event.Slug)
+		}
+		if m, err := c.FindMarket(ctx, market.ID); err != nil || m.Slug != market.Slug {
+			t.Errorf("by ID: %v, %v", m, err)
+		}
+		if _, err := c.MarketBySlug(ctx, strings.ToUpper(market.Slug)); !IsNotFound(err) {
+			t.Errorf("slug in capitals: error = %v, want not found", err)
+		}
+		if _, err := c.FindMarket(ctx, "999999999"); !IsNotFound(err) {
+			t.Errorf("unknown ID: error = %v, want not found", err)
+		}
+		// An ID too long to be one is refused rather than not found.
+		var apiErr *Error
+		if _, err := c.FindMarket(ctx, "999999999999"); !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnprocessableEntity {
+			t.Errorf("an ID of twelve digits: error = %v, want a 422", err)
+		}
+	})
+
 	t.Run("tag", func(t *testing.T) {
 		tag, err := c.Tag(ctx, "politics")
 		if err != nil {
@@ -230,6 +257,27 @@ func TestLive(t *testing.T) {
 		var apiErr *Error
 		if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
 			t.Errorf("a 60-day range: error = %v, want a 400", err)
+		}
+	})
+
+	// What the chart rests on: every interval is one page when no limit is
+	// asked for, oldest first, and a token with no book is not found.
+	t.Run("price history by interval", func(t *testing.T) {
+		for _, interval := range HistoryIntervals {
+			points, next, err := c.PriceHistory(ctx, HistoryQuery{TokenID: tokenID, Interval: interval})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(points) == 0 || next != "" {
+				t.Errorf("%s: %d points, next = %q; want some, in one page", interval, len(points), next)
+				continue
+			}
+			if first, last := points[0], points[len(points)-1]; !last.Time.After(first.Time.Time) {
+				t.Errorf("%s: runs from %v to %v", interval, first.Time, last.Time)
+			}
+		}
+		if _, err := c.Book(ctx, "123"); !IsNotFound(err) {
+			t.Errorf("book of an unknown token: error = %v, want not found", err)
 		}
 	})
 

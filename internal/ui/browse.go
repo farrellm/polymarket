@@ -228,24 +228,14 @@ func (b *browse) marketRow(m *api.Market) []string {
 	if b.event != nil && m.GroupItemTitle != "" {
 		name = m.GroupItemTitle
 	}
-	price := missing
-	if len(m.Outcomes) > 0 && m.Outcomes[0].Price.Valid {
-		price = format.Price(m.Outcomes[0].Price.Value)
-	}
-	change := missing
-	if m.Change1d.Valid {
-		change = format.Delta(m.Change1d.Value)
-		switch {
-		case m.Change1d.Value > 0:
-			change = b.st.up.Render(change)
-		case m.Change1d.Value < 0:
-			change = b.st.down.Render(change)
-		}
+	first := missing
+	if len(m.Outcomes) > 0 {
+		first = price(m.Outcomes[0].Price)
 	}
 	return []string{
 		name,
-		price,
-		change,
+		first,
+		b.st.delta(m.Change1d),
 		money(m.Volume24h),
 		money(m.Volume),
 		money(m.Liquidity),
@@ -842,17 +832,34 @@ func (b *browse) handleKey(msg tea.KeyPressMsg) (tea.Cmd, nav) {
 	return nil, nav{}
 }
 
-// open goes down to the markets of the event under the cursor.
+// open goes down a level from the row under the cursor: to the markets of an
+// event, or to the detail of a market. An event with only the one market has
+// no list worth showing, and opens on that market.
 func (b *browse) open() nav {
 	l := b.cur()
 	at := l.list.cursor
-	if b.tab == tabEvents && at < len(l.events) {
-		return nav{push: newEventBrowse(b.env, l.events[at], b.filter)}
-	}
-	if at < len(l.markets) {
-		b.flash = "the detail of a market is not there yet"
+	switch {
+	case b.tab == tabEvents && at < len(l.events):
+		event := &l.events[at]
+		if len(event.Markets) == 1 {
+			return nav{push: newDetail(b.env, within(event.Markets[0], event), false)}
+		}
+		return nav{push: newEventBrowse(b.env, *event, b.filter)}
+	case b.tab == tabMarkets && at < len(l.markets) && b.event != nil:
+		return nav{push: newDetail(b.env, within(l.markets[at], b.event), true)}
+	case b.tab == tabMarkets && at < len(l.markets):
+		return nav{push: newDetail(b.env, l.markets[at], false)}
 	}
 	return nav{}
+}
+
+// within gives a market that arrived inside an event that event, as the
+// markets listing would have sent it: its page on the site lives under it.
+func within(m api.Market, event *api.Event) api.Market {
+	parent := *event
+	parent.Markets = nil
+	m.Events = []api.Event{parent}
+	return m
 }
 
 // updateSearch drives the search prompt. Unlike the find on the Tags level

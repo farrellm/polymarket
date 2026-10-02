@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -142,6 +143,26 @@ func (c *Client) Market(ctx context.Context, id string) (*Market, error) {
 		return nil, err
 	}
 	return &m, nil
+}
+
+// MarketBySlug fetches one market by its slug, with a summary of its event
+// but without its tags. The slug has to match in case, unlike a tag's; an
+// unknown one is an error that IsNotFound recognises.
+func (c *Client) MarketBySlug(ctx context.Context, slug string) (*Market, error) {
+	var m Market
+	if err := c.get(ctx, c.gamma, "/markets/slug/"+url.PathEscape(slug), nil, &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// FindMarket fetches a market named by its ID or by its slug. An ID is all
+// digits, which no slug is, and the service refuses anything else as one.
+func (c *Client) FindMarket(ctx context.Context, ref string) (*Market, error) {
+	if ref != "" && strings.Trim(ref, "0123456789") == "" {
+		return c.Market(ctx, ref)
+	}
+	return c.MarketBySlug(ctx, ref)
 }
 
 // Tag looks a tag up by its slug. An unknown slug is an error that

@@ -23,6 +23,12 @@ func (p *page[T]) next() string {
 	return p.Pagination.NextCursor
 }
 
+// HistoryIntervals are how far back a price history can be asked to go,
+// shortest first. The service picks the spacing of the points to suit: a
+// minute for a day, five for a week, half an hour for a month, and half a
+// day for everything.
+var HistoryIntervals = []string{"1h", "6h", "1d", "1w", "1m", "max"}
+
 // HistoryQuery selects the price history of one outcome.
 //
 // The service needs a time component: either Interval or Start. A Start to

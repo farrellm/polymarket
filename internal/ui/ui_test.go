@@ -48,8 +48,19 @@ type fakeClient struct {
 	found map[int]api.SearchResult
 	// event is what a refresh of an event answers, keyed by ID.
 	event map[string]api.Event
+	// market is what a refresh of a market answers, keyed by ID.
+	market map[string]api.Market
+	// books are keyed by token ID. Any other token has no book, which is
+	// what the service says of a market that is not trading.
+	books map[string]api.Book
+	// history is keyed by token ID and interval, with a space between.
+	history map[string][]api.PricePoint
+	// trades are every market's.
+	trades []api.Trade
 	// fail, when set, is what the listings answer with instead.
 	fail error
+	// openErr is what opening a page in the browser answers.
+	openErr error
 
 	queries       []api.EventsQuery
 	marketQueries []api.MarketsQuery
@@ -57,6 +68,12 @@ type fakeClient struct {
 	slugs         []string
 	relatedSlugs  []string
 	eventIDs      []string
+	marketIDs     []string
+	bookTokens    []string
+	histories     []api.HistoryQuery
+	tradeQueries  []api.TradesQuery
+	// opened are the pages handed to the browser.
+	opened []string
 	// done holds the Done channel of each request's context.
 	done []<-chan struct{}
 }
@@ -130,12 +147,64 @@ func (c *fakeClient) Search(ctx context.Context, q api.SearchQuery) (*api.Search
 	return &res, nil
 }
 
+func (c *fakeClient) Market(ctx context.Context, id string) (*api.Market, error) {
+	c.marketIDs = append(c.marketIDs, id)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, c.fail
+	}
+	m, ok := c.market[id]
+	if !ok {
+		return nil, &api.Error{Status: http.StatusNotFound, Body: `{"error":"id not found"}`}
+	}
+	return &m, nil
+}
+
+func (c *fakeClient) Book(ctx context.Context, tokenID string) (*api.Book, error) {
+	c.bookTokens = append(c.bookTokens, tokenID)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, c.fail
+	}
+	b, ok := c.books[tokenID]
+	if !ok {
+		return nil, &api.Error{Status: http.StatusNotFound, Body: `{"error":"No orderbook exists for the requested token id"}`}
+	}
+	return &b, nil
+}
+
+func (c *fakeClient) PriceHistory(ctx context.Context, q api.HistoryQuery) ([]api.PricePoint, string, error) {
+	c.histories = append(c.histories, q)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, "", c.fail
+	}
+	return c.history[q.TokenID+" "+q.Interval], "", nil
+}
+
+func (c *fakeClient) Trades(ctx context.Context, q api.TradesQuery) ([]api.Trade, string, error) {
+	c.tradeQueries = append(c.tradeQueries, q)
+	c.done = append(c.done, ctx.Done())
+	if c.fail != nil {
+		return nil, "", c.fail
+	}
+	return c.trades, "", nil
+}
+
 // testNow is the moment the tests' end dates are measured against.
 var testNow = time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
 
 // newModel starts a browser over the client with the clock stopped.
+// Pages meant for the browser are recorded on the client instead.
 func newModel(c Client) *Model {
-	return New(c, Options{Now: func() time.Time { return testNow }})
+	o := Options{Now: func() time.Time { return testNow }}
+	if f, ok := c.(*fakeClient); ok {
+		o.OpenURL = func(url string) error {
+			f.opened = append(f.opened, url)
+			return f.openErr
+		}
+	}
+	return New(c, o)
 }
 
 func tag(label string) api.Tag {
@@ -920,6 +989,15 @@ func TestViewFitsTheWindow(t *testing.T) {
 		check("sub-tags")
 		press(m, "esc", "g", "enter")
 		check("an event's markets")
+		// A market with nothing to it, and then one with a long question.
+		press(m, "enter")
+		check("a market")
+		press(m, "tab")
+		check("about a market")
+		press(m, "esc", "esc", "tab", "enter", "y")
+		check("a market from the list")
+		press(m, "tab", "o")
+		check("about a market from the list")
 	}
 }
 

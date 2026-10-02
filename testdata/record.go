@@ -74,6 +74,7 @@ func run() error {
 	}{
 		{"event.json", http.StatusOK, gamma + "/events/" + eventID, nil},
 		{"market.json", http.StatusOK, gamma + "/markets/" + market.id, nil},
+		{"market_slug.json", http.StatusOK, gamma + "/markets/slug/" + market.slug, nil},
 		{"tag.json", http.StatusOK, gamma + "/tags/slug/politics", nil},
 		{"related_tags.json", http.StatusOK, gamma + "/tags/slug/politics/related-tags/tags", url.Values{
 			"status":     {"active"},
@@ -187,7 +188,7 @@ func trim(v any) any {
 }
 
 type marketRef struct {
-	id, conditionID, tokenID string
+	id, slug, conditionID, tokenID string
 }
 
 // tradingMarket picks, from an events listing, the first market that is
@@ -218,6 +219,7 @@ func tradingMarket(listing any) (eventID string, m marketRef, err error) {
 			}
 			eventID, _ = event["id"].(string)
 			m.id, _ = market["id"].(string)
+			m.slug, _ = market["slug"].(string)
 			m.conditionID, _ = market["conditionId"].(string)
 			m.tokenID = tokens[0]
 			return eventID, m, nil

@@ -313,6 +313,30 @@ func TestMarket(t *testing.T) {
 	}
 }
 
+// A market is looked up by its ID if what names it is a number, and by its
+// slug otherwise; the slug's answer carries the event.
+func TestFindMarket(t *testing.T) {
+	const slug = "will-the-fed-decrease-interest-rates-by-50-bps-after-the-october-2026-meeting-20260617190324029"
+	var paths []string
+	c := newTestClient(t, serve(t, http.StatusOK, fixture(t, "market_slug.json"), func(r *http.Request) {
+		paths = append(paths, r.URL.Path)
+	}))
+	for _, ref := range []string{slug, "2589810"} {
+		m, err := c.FindMarket(context.Background(), ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkMarket(t, m)
+		if len(m.Events) != 1 || m.Events[0].Slug == "" || m.Events[0].Title == "" {
+			t.Errorf("events = %+v, want the market's own", m.Events)
+		}
+	}
+	want := []string{"/gamma/markets/slug/" + slug, "/gamma/markets/2589810"}
+	if !slices.Equal(paths, want) {
+		t.Errorf("paths = %q, want %q", paths, want)
+	}
+}
+
 func TestTag(t *testing.T) {
 	c := newTestClient(t, serve(t, http.StatusOK, fixture(t, "tag.json"), func(r *http.Request) {
 		// A slug typed by hand may hold anything; it must stay one segment.

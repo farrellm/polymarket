@@ -7,6 +7,7 @@ package export
 
 import (
 	"iter"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -208,7 +209,7 @@ func marketRow(m *api.Market) []string {
 		number(m.Volume1m),
 		number(m.Liquidity),
 		tagList(m.Tags),
-		marketURL(m),
+		MarketURL(m),
 	)
 }
 
@@ -318,6 +319,167 @@ func eventRow(e *api.Event) []string {
 	}
 }
 
+// ofOutcomeColumns are what the datasets about one outcome of one market start
+// with: which market, and which of its outcomes.
+var ofOutcomeColumns = []Column{
+	{"market_id", Text},
+	{"market_slug", Text},
+	{"question", Text},
+	{"condition_id", Text},
+	{"outcome_index", Number},
+	{"outcome", Text},
+	{"token_id", Text},
+}
+
+// ofOutcome is the cells of ofOutcomeColumns. An index the market has no
+// outcome for leaves the outcome's own cells empty.
+func ofOutcome(m *api.Market, index int) []string {
+	var o api.Outcome
+	if index >= 0 && index < len(m.Outcomes) {
+		o = m.Outcomes[index]
+	}
+	return []string{m.ID, m.Slug, m.Question, m.ConditionID, strconv.Itoa(index), o.Label, o.TokenID}
+}
+
+// Series is a stretch of the price history of one outcome: what one page of
+// it holds.
+type Series struct {
+	Market *api.Market
+	// Outcome is the outcome's index among the market's, from zero.
+	Outcome int
+	Points  []api.PricePoint
+}
+
+var historyColumns = append(slices.Clone(ofOutcomeColumns),
+	Column{"timestamp", Time},
+	Column{"price", Number},
+	Column{"resolution_seconds", Number},
+)
+
+// History is the history dataset: one row per outcome and moment, each
+// outcome's oldest first. resolution_seconds is the width of the bucket the
+// price stands for, and zero on the last row of an outcome that is still
+// trading, which is its price now.
+func History(pages iter.Seq2[[]Series, error]) Dataset {
+	return &table{
+		name:    "history",
+		columns: historyColumns,
+		rows:    flatten(pages, historyRows, nil),
+	}
+}
+
+func historyRows(s *Series) [][]string {
+	lead := ofOutcome(s.Market, s.Outcome)
+	rows := make([][]string, len(s.Points))
+	for i, p := range s.Points {
+		rows[i] = append(slices.Clone(lead),
+			timestamp(p.Time),
+			number(p.Price),
+			strconv.Itoa(p.ResolutionSeconds),
+		)
+	}
+	return rows
+}
+
+var tradeColumns = []Column{
+	{"timestamp", Time},
+	{"condition_id", Text},
+	{"market_slug", Text},
+	{"event_slug", Text},
+	{"question", Text},
+	{"side", Text},
+	{"outcome_index", Number},
+	{"outcome", Text},
+	{"token_id", Text},
+	{"price", Number},
+	{"size", Number},
+	{"proxy_wallet", Text},
+	{"name", Text},
+	{"pseudonym", Text},
+	{"transaction_hash", Text},
+}
+
+// Trades is the trades dataset: one row per fill, in the order given, which
+// from the service is newest first. side is the taker's, BUY or SELL, and
+// size is in shares.
+func Trades(pages iter.Seq2[[]api.Trade, error]) Dataset {
+	return &table{
+		name:    "trades",
+		columns: tradeColumns,
+		rows: flatten(pages,
+			func(t *api.Trade) [][]string { return [][]string{tradeRow(t)} },
+			nil),
+	}
+}
+
+func tradeRow(t *api.Trade) []string {
+	return []string{
+		timestamp(t.Time),
+		t.ConditionID,
+		t.Slug,
+		t.EventSlug,
+		t.Title,
+		t.Side,
+		strconv.Itoa(t.OutcomeIndex),
+		t.Outcome,
+		t.TokenID,
+		number(t.Price),
+		number(t.Size),
+		t.ProxyWallet,
+		t.Name,
+		t.Pseudonym,
+		t.TransactionHash,
+	}
+}
+
+// Depth is the order book of one outcome of a market.
+type Depth struct {
+	Market *api.Market
+	// Outcome is the outcome's index among the market's, from zero.
+	Outcome int
+	Book    *api.Book
+}
+
+var bookColumns = append(slices.Clone(ofOutcomeColumns),
+	Column{"timestamp", Time},
+	Column{"side", Text},
+	Column{"level", Number},
+	Column{"price", Number},
+	Column{"size", Number},
+)
+
+// Book is the book dataset: one row per outcome, side and price level of a
+// snapshot of the order book. Each outcome's bids come before its asks, and
+// level counts from 1 at the best price of a side. timestamp is the
+// snapshot's.
+func Book(pages iter.Seq2[[]Depth, error]) Dataset {
+	return &table{
+		name:    "book",
+		columns: bookColumns,
+		rows:    flatten(pages, bookRows, nil),
+	}
+}
+
+func bookRows(d *Depth) [][]string {
+	lead := append(ofOutcome(d.Market, d.Outcome), timestamp(d.Book.Time))
+	rows := make([][]string, 0, len(d.Book.Bids)+len(d.Book.Asks))
+	sides := []struct {
+		name   string
+		levels []api.Level
+	}{{"bid", d.Book.Bids}, {"ask", d.Book.Asks}}
+	for _, side := range sides {
+		for i, l := range side.levels {
+			rows = append(rows, append(slices.Clone(lead),
+				side.name,
+				strconv.Itoa(i+1),
+				number(l.Price),
+				number(l.Size),
+			))
+		}
+	}
+	return rows
+}
+
 // eventOf is the event a market belongs to, or an empty one for a market
 // that arrived without it.
 func eventOf(m *api.Market) *api.Event {
@@ -336,9 +498,10 @@ func eventURL(slug string) string {
 	return siteURL + "/event/" + slug
 }
 
-// marketURL is the market's page, which lives under its event. Without the
-// event, the site's /market/ address redirects there.
-func marketURL(m *api.Market) string {
+// MarketURL is the market's page on polymarket.com, which lives under its
+// event. Without the event, the site's /market/ address redirects there. A
+// market with no slug has no page to name.
+func MarketURL(m *api.Market) string {
 	switch ev := eventOf(m); {
 	case m.Slug == "":
 		return ""

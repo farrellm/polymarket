@@ -40,6 +40,14 @@ type keyMap struct {
 	Apply    key.Binding
 	Cancel   key.Binding
 
+	// The keys of a market's detail.
+	Interval key.Binding
+	// About is Tab's key on a market, where it shows the description.
+	About  key.Binding
+	Browse key.Binding
+	Copy   key.Binding
+	CopyID key.Binding
+
 	Help key.Binding
 
 	Quit key.Binding
@@ -78,6 +86,12 @@ func defaultKeyMap() keyMap {
 		Right:    key.NewBinding(key.WithKeys("right", "space"), key.WithHelp("→", "next choice")),
 		Apply:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "apply")),
 		Cancel:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+
+		Interval: key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "interval")),
+		About:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "market / about")),
+		Browse:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "website")),
+		Copy:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy slug")),
+		CopyID:   key.NewBinding(key.WithKeys("Y"), key.WithHelp("Y", "copy condition ID")),
 
 		Help: key.NewBinding(key.WithKeys("h", "?"), key.WithHelp("h", "help")),
 

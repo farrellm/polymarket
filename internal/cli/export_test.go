@@ -131,7 +131,7 @@ func TestListFlagsRejected(t *testing.T) {
 		{"an unknown order", listFlags{order: "volumeNum"}, "unknown --order"},
 		{"a date that is not one", listFlags{endsAfter: "next week"}, "--ends-after"},
 		{"a negative floor", listFlags{minVolume: -1}, "negative"},
-		{"a negative limit", listFlags{limit: -1}, "--limit"},
+		{"a negative limit", listFlags{output: output{limit: -1}}, "--limit"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -201,7 +201,12 @@ func TestCompletion(t *testing.T) {
 		{
 			name: "export offers the datasets",
 			args: []string{"export", ""},
-			want: []string{"markets", "events", "outcomes"},
+			want: []string{"markets", "events", "outcomes", "history", "trades", "book"},
+		},
+		{
+			name: "interval offers how far back to go",
+			args: []string{"export", "history", "--interval", ""},
+			want: api.HistoryIntervals,
 		},
 		{
 			name: "order offers the sort fields",
@@ -236,7 +241,19 @@ func TestFlagCompletionIsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The datasets about one market are not sorted: they take none of the
+	// filter flags, and have a market to name instead.
+	about := map[string]bool{}
+	for _, d := range marketDatasets {
+		about[d.name] = true
+	}
 	for _, cmd := range export.Commands() {
+		if about[cmd.Name()] {
+			if cmd.Flags().Lookup("market") == nil || cmd.Flags().Lookup("output") == nil {
+				t.Errorf("export %s: no --market or no --output", cmd.Name())
+			}
+			continue
+		}
 		if _, ok := cmd.GetFlagCompletionFunc("order"); !ok {
 			t.Errorf("export %s: no completion function registered for --order", cmd.Name())
 		}
@@ -256,8 +273,15 @@ const (
 	eventOne = `{"id": "9", "slug": "ev", "title": "Ev", "volume": 2000, "markets": [` + marketOne + `, ` + marketTwo + `]}`
 )
 
-// service is a stand-in for Gamma that serves the listings in two pages and
-// remembers what it was asked.
+// tradeOf is a trade of the first market's first outcome.
+func tradeOf(side, hash string) string {
+	return `{"timestamp": 1790947065, "side": "` + side + `", "size": 50, "price": 0.6, "outcome": "Yes",
+		"outcome_index": 0, "token_id": "11", "condition_id": "0x1", "title": "First?", "slug": "first",
+		"event_slug": "ev", "transaction_hash": "` + hash + `"}`
+}
+
+// service is a stand-in for the three services. It serves the listings in
+// two pages, and remembers what it was asked.
 type service struct {
 	*httptest.Server
 
@@ -298,6 +322,38 @@ func newService(t *testing.T) *service {
 				return
 			}
 			w.Write([]byte(`{"events": [` + eventOne + `], "next_cursor": "page2"}`))
+		case "/gamma/markets/slug/first", "/gamma/markets/1":
+			w.Write([]byte(marketOne))
+		case "/gamma/markets/999999999999":
+			// Too many digits for an ID.
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"type": "validation error", "error": "id is invalid"}`))
+		case "/data/prices-history":
+			if r.URL.Query().Get("cursor") != "" {
+				w.Write([]byte(`{"data": [{"timestamp": 1790866800, "price": 0.61, "resolution_seconds": 0}],
+					"pagination": {"has_more": false, "next_cursor": null}}`))
+				return
+			}
+			w.Write([]byte(`{"data": [{"timestamp": 1790859600, "price": 0.5, "resolution_seconds": 3600},
+				{"timestamp": 1790863200, "price": 0.6, "resolution_seconds": 3600}],
+				"pagination": {"has_more": true, "next_cursor": "page2"}}`))
+		case "/data/trades":
+			if r.URL.Query().Get("cursor") != "" {
+				w.Write([]byte(`{"data": [` + tradeOf("SELL", "0xc") + `], "pagination": {"has_more": false}}`))
+				return
+			}
+			w.Write([]byte(`{"data": [` + tradeOf("BUY", "0xa") + `, ` + tradeOf("SELL", "0xb") + `],
+				"pagination": {"has_more": true, "next_cursor": "page2"}}`))
+		case "/clob/book":
+			// Only the first outcome has a book.
+			if r.URL.Query().Get("token_id") != "11" {
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"error": "No orderbook exists for the requested token id"}`))
+				return
+			}
+			w.Write([]byte(`{"market": "0x1", "asset_id": "11", "timestamp": "1790957665098",
+				"bids": [{"price": "0.58", "size": "10"}, {"price": "0.59", "size": "20"}],
+				"asks": [{"price": "0.62", "size": "30"}, {"price": "0.61", "size": "40"}]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"type": "not found error", "error": "not found"}`))
@@ -327,7 +383,7 @@ func (s *service) run(t *testing.T, args ...string) (stdout, stderr string, err 
 	var out, errOut bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
-	cmd.SetArgs(append(args, "--gamma-url", s.URL+"/gamma"))
+	cmd.SetArgs(append(args, "--gamma-url", s.URL+"/gamma", "--clob-url", s.URL+"/clob", "--data-url", s.URL+"/data"))
 	err = cmd.Execute()
 	return out.String(), errOut.String(), err
 }
@@ -560,6 +616,14 @@ func TestExportRejectsBadUsage(t *testing.T) {
 		{"--order", "bogus"},
 		{"--closed", "--all"},
 		{"--ends-after", "soon"},
+		// The datasets about one market need to be told which.
+		{"export", "history"},
+		{"export", "history", "--market", " "},
+		{"export", "history", "--market", "first", "--interval", "2d"},
+		{"export", "history", "--market", "first", "--tag", "politics"},
+		{"export", "trades", "--market", "first", "--since", "soon"},
+		{"export", "trades", "--market", "first", "--since", "2026-10-02", "--until", "2026-10-01"},
+		{"export", "book", "--market", "first", "--limit", "-1"},
 	} {
 		if _, _, err := s.run(t, args...); err == nil {
 			t.Errorf("%v was accepted, want an error", args)
@@ -578,9 +642,16 @@ func TestExportAloneListsTheDatasets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	names := []string{}
 	for _, d := range listDatasets {
-		if !strings.Contains(stdout, d.name) {
-			t.Errorf("help %q does not mention %s", stdout, d.name)
+		names = append(names, d.name)
+	}
+	for _, d := range marketDatasets {
+		names = append(names, d.name)
+	}
+	for _, name := range names {
+		if !strings.Contains(stdout, name) {
+			t.Errorf("help %q does not mention %s", stdout, name)
 		}
 	}
 }

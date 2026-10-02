@@ -111,6 +111,58 @@ const goldenEvents = `[
   }
 ]`
 
+// The detail datasets follow the first golden market. The history is of
+// both its outcomes, the second ending on the price now; the trades include
+// a trader whose name a spreadsheet would evaluate; and the book has a side
+// with one level, as a market priced near zero does.
+const (
+	goldenHistoryYes = `[
+  {"timestamp": 1790859600, "price": 0.5425, "resolution_seconds": 3600},
+  {"timestamp": 1790863200, "price": 0.55, "resolution_seconds": 3600}
+]`
+	goldenHistoryNo = `[
+  {"timestamp": 1790859600, "price": 0.4575, "resolution_seconds": 3600},
+  {"timestamp": 1790865012, "price": 0.4495, "resolution_seconds": 0}
+]`
+	goldenTrades = `[
+  {
+    "timestamp": 1790947065, "side": "SELL", "size": 5000.0, "price": 0.55,
+    "outcome": "Yes", "outcome_index": 0,
+    "token_id": "10987686843795058436998738440635625993951919311725346501234567890123456789012",
+    "condition_id": "0x05297f854d3b757d5e51a1a29c7f225a80b14b2a161d6b7f9a61677da7a80ced",
+    "title": "Will Anna win the 2026 election?", "slug": "will-anna-win", "event_slug": "the-2026-election",
+    "proxy_wallet": "0x54b56146656e7eef9da02b3a030c18e06e924b31", "name": "pup1", "pseudonym": "Grand-Reasoning",
+    "transaction_hash": "0x25aadacb8b5eecdf51dca68b3847b62f9c7ce8215ff001ae79ada91eb39a9c08"
+  },
+  {
+    "timestamp": 1790946122, "side": "BUY", "size": 333.333334, "price": 0.449,
+    "outcome": "No", "outcome_index": 1,
+    "token_id": "30630994248667897740988010928640156930000000000000000000000000000000000000001",
+    "condition_id": "0x05297f854d3b757d5e51a1a29c7f225a80b14b2a161d6b7f9a61677da7a80ced",
+    "title": "Will Anna win the 2026 election?", "slug": "will-anna-win", "event_slug": "the-2026-election",
+    "proxy_wallet": "0x01a2a8841398211c2a5d7304b186a29651f77977", "name": "=HYPERLINK(\"x\")", "pseudonym": "",
+    "transaction_hash": "0x3c4c9f4f5a589a1189066003e905f039f2083bd84d5eeb26a6e9ee17350252df"
+  }
+]`
+	goldenBook = `{
+  "market": "0x05297f854d3b757d5e51a1a29c7f225a80b14b2a161d6b7f9a61677da7a80ced",
+  "asset_id": "10987686843795058436998738440635625993951919311725346501234567890123456789012",
+  "timestamp": "1790957665098",
+  "bids": [{"price": "0.55", "size": "291246.63"}],
+  "asks": [{"price": "0.551", "size": "97435.68"}, {"price": "0.56", "size": "5.21"}],
+  "tick_size": "0.001", "min_order_size": "5", "last_trade_price": "0.55", "neg_risk": true
+}`
+)
+
+func decodeOne[T any](t *testing.T, text string) T {
+	t.Helper()
+	var item T
+	if err := json.Unmarshal([]byte(text), &item); err != nil {
+		t.Fatal(err)
+	}
+	return item
+}
+
 func decode[T any](t *testing.T, text string) []T {
 	t.Helper()
 	var items []T
@@ -123,10 +175,22 @@ func decode[T any](t *testing.T, text string) []T {
 func goldenDatasets(t *testing.T) []Dataset {
 	t.Helper()
 	markets := decode[api.Market](t, goldenMarkets)
+	anna := &markets[0]
+	book := decodeOne[api.Book](t, goldenBook)
 	return []Dataset{
 		Markets(Loaded(markets)),
 		Outcomes(Loaded(markets)),
 		Events(Loaded(decode[api.Event](t, goldenEvents))),
+		History(Loaded([]Series{
+			{Market: anna, Outcome: 0, Points: decode[api.PricePoint](t, goldenHistoryYes)},
+			{Market: anna, Outcome: 1, Points: decode[api.PricePoint](t, goldenHistoryNo)},
+		})),
+		Trades(Loaded(decode[api.Trade](t, goldenTrades))),
+		// The second outcome has no book to show: it writes no rows.
+		Book(Loaded([]Depth{
+			{Market: anna, Outcome: 0, Book: &book},
+			{Market: anna, Outcome: 1, Book: &api.Book{}},
+		})),
 	}
 }
 
@@ -325,6 +389,29 @@ func TestFixtures(t *testing.T) {
 		{Outcomes(Loaded(markets.Markets)), -1, "token_id"},
 		{Events(Loaded(events.Events)), len(events.Events), "id"},
 	}
+	// The detail of the market the recorder followed.
+	var market api.Market
+	readFixture(t, "market.json", &market)
+	var history struct {
+		Data []api.PricePoint `json:"data"`
+	}
+	readFixture(t, "prices_history.json", &history)
+	var trades struct {
+		Data []api.Trade `json:"data"`
+	}
+	readFixture(t, "trades.json", &trades)
+	var book api.Book
+	readFixture(t, "book.json", &book)
+	tests = append(tests, []struct {
+		d    Dataset
+		rows int
+		id   string
+	}{
+		{History(Loaded([]Series{{Market: &market, Points: history.Data}})), len(history.Data), "token_id"},
+		{Trades(Loaded(trades.Data)), len(trades.Data), "transaction_hash"},
+		{Book(Loaded([]Depth{{Market: &market, Book: &book}})), len(book.Bids) + len(book.Asks), "price"},
+	}...)
+
 	for _, tt := range tests {
 		records, sum := export(t, tt.d, Options{})
 		if tt.rows >= 0 && sum.Rows != tt.rows {

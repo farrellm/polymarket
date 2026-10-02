@@ -49,9 +49,7 @@ type listFlags struct {
 	minLiquidity float64
 	endsAfter    string
 	endsBefore   string
-	limit        int
-	output       string
-	raw          bool
+	output
 }
 
 // filter is what a listing is narrowed and sorted by: the flags, checked.
@@ -231,7 +229,8 @@ func newExportCommand(o *options) *cobra.Command {
 			"no value. A file is written under a temporary name and renamed once\n" +
 			"complete, so an interrupted export leaves nothing behind.",
 		Example: "polymarket export markets --tag politics --min-volume 10000 --limit 5000 -o politics.csv\n" +
-			"polymarket export events --order endDate | grid",
+			"polymarket export events --order endDate | grid\n" +
+			"polymarket export history --market will-anna-win --interval 1w | grid",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
@@ -239,6 +238,9 @@ func newExportCommand(o *options) *cobra.Command {
 	}
 	for _, d := range listDatasets {
 		cmd.AddCommand(newListCommand(o, d))
+	}
+	for _, d := range marketDatasets {
+		cmd.AddCommand(newMarketCommand(o, d))
 	}
 	return cmd
 }
@@ -259,12 +261,9 @@ func newListCommand(o *options, d listDataset) *cobra.Command {
 
 // bindListFlags gives cmd the flags the list datasets share, parsed into lf.
 func bindListFlags(cmd *cobra.Command, lf *listFlags) {
-	f := cmd.Flags()
 	bindFilterFlags(cmd, lf)
-	f.StringVar(&lf.search, "search", "", "only what matches this text: an event by its title, a market by its event")
-	f.IntVar(&lf.limit, "limit", 0, "write at most this many rows (default: all of them)")
-	f.StringVarP(&lf.output, "output", "o", "-", "write to this file; - is standard output")
-	f.BoolVar(&lf.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets")
+	cmd.Flags().StringVar(&lf.search, "search", "", "only what matches this text: an event by its title, a market by its event")
+	lf.bind(cmd)
 }
 
 // bindFilterFlags gives cmd the flags that select and sort a listing, which
@@ -295,21 +294,47 @@ func runList(cmd *cobra.Command, o *options, d listDataset, lf *listFlags) error
 		return err
 	}
 
-	// One more than the limit is enough to tell whether anything was cut off.
-	pageLimit := pageSize
-	if lf.limit > 0 {
-		pageLimit = min(pageSize, lf.limit+1)
-	}
 	// fang.Execute passes the context main supplies down to here, so an
 	// interrupt stops the paging.
 	ctx := cmd.Context()
-	ds, err := d.open(ctx, o.client(), f, pageLimit)
+	ds, err := d.open(ctx, o.client(), f, pageLimit(pageSize, lf.limit))
 	if err != nil {
 		return err
 	}
+	return write(cmd, ds, lf.output)
+}
 
-	opts := export.Options{Limit: lf.limit, Raw: lf.raw}
-	if lf.output == "-" {
+// pageLimit is the page size to ask a listing for: the most it hands out,
+// or, under a --limit, one row more than that, which is enough to tell
+// whether anything was cut off.
+func pageLimit(most, limit int) int {
+	if limit > 0 {
+		return min(most, limit+1)
+	}
+	return most
+}
+
+// output is where a dataset is to be written, and how: the flags every
+// dataset shares.
+type output struct {
+	path  string
+	limit int
+	raw   bool
+}
+
+// bind gives cmd the flags that say where the rows go.
+func (out *output) bind(cmd *cobra.Command) {
+	f := cmd.Flags()
+	f.IntVar(&out.limit, "limit", 0, "write at most this many rows (default: all of them)")
+	f.StringVarP(&out.path, "output", "o", "-", "write to this file; - is standard output")
+	f.BoolVar(&out.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets")
+}
+
+// write runs the export, to standard output or to the file named.
+func write(cmd *cobra.Command, ds export.Dataset, out output) error {
+	ctx := cmd.Context()
+	opts := export.Options{Limit: out.limit, Raw: out.raw}
+	if out.path == "-" {
 		// Nothing but the data: stderr is usually the same terminal that
 		// whatever reads the pipe is drawing on.
 		if _, err := export.Run(ctx, ds, cmd.OutOrStdout(), opts); err != nil {
@@ -324,12 +349,12 @@ func runList(cmd *cobra.Command, o *options, d listDataset, lf *listFlags) error
 		p = &progress{w: stderr}
 		opts.Progress = p.update
 	}
-	sum, err := export.File(ctx, ds, lf.output, opts)
+	sum, err := export.File(ctx, ds, out.path, opts)
 	p.clear()
 	if err != nil {
-		return interrupted(ctx, err, lf.output+" was not written")
+		return interrupted(ctx, err, out.path+" was not written")
 	}
-	reportSummary(stderr, sum, lf.output, lf.limit)
+	reportSummary(stderr, sum, out.path, out.limit)
 	return nil
 }
 

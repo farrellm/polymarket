@@ -1,0 +1,12 @@
+{
+  "$schema": "https://gamma-api.polymarket.com/schemas/Tag.json",
+  "createdAt": "2023-10-25T18:55:50.681Z",
+  "forceHide": true,
+  "forceShow": false,
+  "id": "2",
+  "label": "Politics",
+  "publishedAt": "2023-10-25 18:55:50.674+00",
+  "slug": "politics",
+  "updatedAt": "2026-04-17T20:39:54.201881Z",
+  "updatedBy": 13
+}

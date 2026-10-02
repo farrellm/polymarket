@@ -1,0 +1,4 @@
+{
+  "error": "offset is not allowed on keyset endpoints",
+  "type": "validation error"
+}

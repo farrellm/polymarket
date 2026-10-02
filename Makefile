@@ -90,6 +90,14 @@ check: ## everything CI runs: format check, vet, lint, race tests
 	$(MAKE) lint
 	go test -race ./...
 
+.PHONY: fixtures
+fixtures: ## re-record testdata/*.json from the live API
+	go run testdata/record.go
+
+.PHONY: smoke
+smoke: ## check the client against the live API (not part of check)
+	go test -tags live -run '^TestLive$$' -count=1 -v ./internal/api/...
+
 .PHONY: run
 run: build ## build, then start polymarket
 	./$(BINARY)

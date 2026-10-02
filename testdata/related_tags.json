@@ -1,0 +1,191 @@
+[
+  {
+    "activeEventsCount": 328,
+    "createdAt": "2023-11-02T21:23:16.39Z",
+    "forceShow": false,
+    "id": "126",
+    "label": "Trump",
+    "publishedAt": "2023-11-02 21:23:16.384+00",
+    "slug": "trump",
+    "updatedAt": "2026-04-17T20:39:14.206724Z",
+    "updatedBy": 15
+  },
+  {
+    "activeEventsCount": 1196,
+    "createdAt": "2025-06-19T20:54:40.884795Z",
+    "id": "102289",
+    "label": "Midterms",
+    "slug": "midterms",
+    "updatedAt": "2026-04-17T20:51:49.953987Z"
+  },
+  {
+    "activeEventsCount": 116,
+    "createdAt": "2026-03-04T19:51:03.007216Z",
+    "forceShow": false,
+    "id": "104093",
+    "label": "Senate Elections",
+    "slug": "senate-midterms",
+    "updatedAt": "2026-09-24T18:00:03.002079Z"
+  },
+  {
+    "activeEventsCount": 874,
+    "createdAt": "2026-02-24T17:15:47.554292Z",
+    "forceShow": false,
+    "id": "103899",
+    "label": "House Elections",
+    "slug": "house-elections",
+    "updatedAt": "2026-04-17T17:25:43.143394Z"
+  },
+  {
+    "activeEventsCount": 93,
+    "createdAt": "2026-03-04T19:55:35.574097Z",
+    "forceShow": false,
+    "id": "104094",
+    "label": "Governor Elections",
+    "slug": "governor-midterms",
+    "updatedAt": "2026-09-24T18:00:03.066728Z"
+  },
+  {
+    "activeEventsCount": 59,
+    "createdAt": "2025-10-30T21:09:39.366658Z",
+    "forceShow": false,
+    "id": "102788",
+    "label": "Mayoral Elections",
+    "slug": "mayoral-elections",
+    "updatedAt": "2026-04-17T20:33:50.097595Z"
+  },
+  {
+    "activeEventsCount": 13,
+    "createdAt": "2024-09-05T16:22:43.47173Z",
+    "forceShow": false,
+    "id": "100418",
+    "label": "Derivatives",
+    "slug": "derivatives",
+    "updatedAt": "2026-04-17T20:14:51.324698Z"
+  },
+  {
+    "activeEventsCount": 569,
+    "createdAt": "2024-03-07T20:41:56.773Z",
+    "createdBy": 15,
+    "forceShow": true,
+    "id": "1597",
+    "label": "Global Elections",
+    "publishedAt": "2024-03-07 20:44:01.258+00",
+    "slug": "global-elections",
+    "updatedAt": "2026-04-17T21:08:23.096987Z",
+    "updatedBy": 15
+  },
+  {
+    "activeEventsCount": 141,
+    "id": "100185",
+    "label": "Brazil",
+    "slug": "brazil",
+    "updatedAt": "2026-04-17T21:10:45.510586Z"
+  },
+  {
+    "activeEventsCount": 52,
+    "createdAt": "2026-04-28T19:50:03.260791Z",
+    "id": "104793",
+    "label": "Israel Election",
+    "slug": "israel-election",
+    "updatedAt": "2026-04-28T19:55:03.279458Z"
+  },
+  {
+    "activeEventsCount": 5,
+    "createdAt": "2024-06-24T15:42:35.370921Z",
+    "forceShow": true,
+    "id": "100282",
+    "label": "French Election",
+    "slug": "french-election",
+    "updatedAt": "2026-04-17T20:52:30.987573Z"
+  },
+  {
+    "activeEventsCount": 49,
+    "createdAt": "2023-11-02T21:52:11.155Z",
+    "forceShow": false,
+    "id": "303",
+    "label": "China",
+    "publishedAt": "2023-11-02 21:52:11.147+00",
+    "slug": "china",
+    "updatedAt": "2026-04-17T20:49:04.250426Z"
+  },
+  {
+    "activeEventsCount": 699,
+    "createdAt": "2024-02-06T19:42:10.132Z",
+    "forceShow": false,
+    "id": "1101",
+    "label": "US Election",
+    "publishedAt": "2024-02-06 19:42:10.126+00",
+    "slug": "us-presidential-election",
+    "updatedAt": "2026-04-17T20:37:36.506311Z"
+  },
+  {
+    "activeEventsCount": 10,
+    "createdAt": "2023-11-02T21:45:56.363Z",
+    "forceShow": false,
+    "id": "264",
+    "label": "Primaries",
+    "publishedAt": "2023-11-02 21:45:56.355+00",
+    "slug": "primaries",
+    "updatedAt": "2026-04-17T20:45:35.450392Z"
+  },
+  {
+    "activeEventsCount": 36,
+    "createdAt": "2023-11-16T16:28:14.438Z",
+    "forceShow": false,
+    "id": "514",
+    "label": "Congress",
+    "publishedAt": "2023-11-16 16:28:14.421+00",
+    "slug": "congress",
+    "updatedAt": "2026-04-15T21:09:13.731814Z"
+  },
+  {
+    "activeEventsCount": 2,
+    "createdAt": "2024-12-18T17:29:52.476644Z",
+    "forceShow": false,
+    "id": "101542",
+    "label": "Gov Shutdown",
+    "slug": "gov-shutdown",
+    "updatedAt": "2026-04-17T20:57:31.935141Z"
+  },
+  {
+    "activeEventsCount": 124,
+    "createdAt": "2023-11-02T21:42:24.949Z",
+    "forceShow": false,
+    "id": "245",
+    "label": "Canada",
+    "publishedAt": "2023-11-02 21:42:24.942+00",
+    "slug": "canada",
+    "updatedAt": "2026-04-17T17:21:50.970781Z"
+  },
+  {
+    "activeEventsCount": 56,
+    "createdAt": "2023-11-02T21:18:49.32Z",
+    "forceShow": false,
+    "id": "95",
+    "label": "Russia",
+    "publishedAt": "2023-11-02 21:18:49.314+00",
+    "slug": "russia",
+    "updatedAt": "2026-04-15T21:03:39.348071Z"
+  },
+  {
+    "activeEventsCount": 27,
+    "createdAt": "2023-11-02T21:43:20.356Z",
+    "forceShow": false,
+    "id": "246",
+    "label": "Venezuela",
+    "publishedAt": "2023-11-02 21:43:20.341+00",
+    "slug": "venezuela",
+    "updatedAt": "2026-04-17T20:31:30.118891Z"
+  },
+  {
+    "activeEventsCount": 14,
+    "createdAt": "2023-12-19T19:50:47.236Z",
+    "forceShow": false,
+    "id": "756",
+    "label": "Epstein",
+    "publishedAt": "2023-12-19 19:50:47.215+00",
+    "slug": "epstein",
+    "updatedAt": "2026-04-17T20:57:31.914885Z"
+  }
+]

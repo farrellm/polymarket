@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestone 1 (scaffold) implemented; the rest is design. Endpoint shapes in §4 were checked against the live API on 2026-10-01.
+Status: milestones 1 (scaffold) and 2 (`internal/api`) implemented; the rest is design. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures on 2026-10-02.
 
 ## 1. Summary
 
@@ -90,9 +90,9 @@ All endpoints are public and unauthenticated. Three services:
 | `GET /tags/slug/{slug}` | resolve a tag typed by name (`--tag`, or a tag outside the ranked set) |
 | `GET /tags/slug/{slug}/related-tags/tags` | `status=active`, `omit_empty=true`; ranked sub-tags of a tag (politics → Trump, Midterms, Senate Elections, …) |
 | `GET /tags` | plain array of `{id,label,slug}`, `limit` ≤ 100 with `offset`. **Not used for the tag level** — see below |
-| `GET /public-search?q=` | `limit_per_type`, `page`, `events_status`; returns `{events, pagination:{hasMore,totalResults}}` |
+| `GET /public-search?q=` | `limit_per_type`, `page`, `events_status` (`active` or `resolved`), `events_tag`; returns `{events, pagination:{hasMore,totalResults}}`, with no `events` member at all when nothing matches |
 | `GET clob/book?token_id=` | `bids`, `asks` (`{price,size}` strings), `tick_size`, `min_order_size`, `last_trade_price`, `timestamp` |
-| `GET data/v2/prices-history?token_id=` | `interval` = `1d`/`1w`/`1m`/`max`, or `start`/`end` epoch seconds; `bucket_seconds`; `limit` ≤ 10000, `cursor`. Returns `{data:[{timestamp,price,resolution_seconds}], pagination}` |
+| `GET data/v2/prices-history?token_id=` | `interval` = `1h`/`6h`/`1d`/`1w`/`1m`/`max`, or `start`/`end` epoch seconds (a range of at most 15 days, else 400); `bucket_seconds`; `limit` ≤ 10000, `cursor`. Returns `{data:[{timestamp,price,resolution_seconds}], pagination}` |
 | `GET data/v2/trades?condition=` | `limit` ≤ 1000, `cursor`, `start`, `end`, `side`. Returns `{data:[…], pagination:{has_more,next_cursor}}` |
 
 ### Where the tag list comes from
@@ -121,6 +121,17 @@ does not appear there is still reachable by typing its name (`/tags/slug/{slug}`
   `flexFloat` type accepts either.
 - Keyset endpoints reject `offset` with 422; paging is `after_cursor` only, and the end
   is an empty or absent `next_cursor`.
+- A market **inside an event** has no `volume*` members at all if it has never traded,
+  and `outcomePrices: null` if it has not opened yet; `/markets/{id}` reports the same
+  market with `"volume": "0"`. `api.Float` therefore records whether a value was sent, so
+  a missing number is not shown or exported as a zero.
+- Timestamps come in three forms: RFC 3339 strings (Gamma), epoch seconds as numbers
+  (Data API), and epoch milliseconds in a string (the CLOB book). `api.Time` reads all three.
+- `/book` lists both sides worst price first; the client re-sorts them best first.
+- On the Data API the end of a listing is `has_more: false`, not a missing cursor.
+- `/public-search` honours fewer filters than the listings: a status and a tag, but no
+  volume, liquidity or end-date bounds, and it ranks by relevance whatever `sort` is
+  given. An unknown `events_status` is ignored rather than refused.
 - Token IDs are 77-digit decimals: keep them as strings everywhere, including CSV.
 - Identifiers differ per service: Gamma `id`/`slug`, CLOB `token_id` (per outcome), Data
   API `condition` (= `conditionId`, per market).
@@ -132,8 +143,9 @@ does not appear there is still reachable by typing its name (`/tags/slug/{slug}`
 - Limiter: 10 req/s, burst 20, shared across services. Documented limits are far higher
   (Gamma `/events` 500 and `/markets` 300 per 10 s; Data `/v2/prices-history` 200 per 10 s),
   so this is politeness, not necessity.
-- Retry on 429 and 5xx: up to 3 attempts, exponential backoff with jitter, honouring
-  `Retry-After`. 4xx other than 429 is returned as a typed `*api.Error{Status, Body}`.
+- Retry on 429, 5xx and a request that got no answer (connection error, timeout): up to 3
+  attempts, exponential backoff with jitter, honouring `Retry-After` up to 30 s. 4xx other
+  than 429 is returned as a typed `*api.Error{Status, Body, URL}` without retrying.
 - 15 s timeout per request; `User-Agent: polymarket-tui/<version>`.
 - `pager.go`: `Pages[T](ctx, fetch func(cursor string) ([]T, string, error)) iter.Seq2[[]T, error]`,
   used by both the TUI ("load next page") and the exporter ("drain everything").
@@ -336,7 +348,7 @@ the same `VERSION`/`LDFLAGS`/`GOBIN` logic and the self-documenting `help` defau
 | `lint` | `golangci-lint run`, falling back to `go run …@$(GOLANGCI_VERSION)`; pinned `v2.13.2` |
 | `tidy` | `go mod tidy` |
 | `check` | everything CI runs: gofmt check, vet, lint, race tests |
-| `fixtures` | re-record `testdata/*.json` from the live API (new; replaces grid's generator) |
+| `fixtures` | re-record `testdata/*.json` from the live API with `testdata/record.go` (new; replaces grid's generator). Tests on the fixtures assert shape, not values, so a new recording does not break them |
 | `smoke` | `go test -tags live ./internal/api/...` against the real API (new; not in `check`) |
 | `clean` | remove the binary and `coverage.out` |
 
@@ -395,9 +407,11 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   is a constant to tune in milestone 4 against start-up time (5 requests, in parallel).
   Tags are flat on the API side; the only hierarchy is the related-tags relation, which
   is why sub-tags are a narrowing step rather than a fifth fixed level.
-- **Not verified**: the docs' 15-day cap on `start`/`end` ranges for price history, and
-  whether `/public-search` honours every filter the list endpoints do. Both get a
-  fixture-backed test once checked in milestone 2.
+- **Search is weaker than the listings** (checked in milestone 2, see §4): the Markets
+  tab's search cannot apply the volume, liquidity and end-date filters or the sort, so
+  milestone 5 has to either apply them client-side to the returned page or say in the
+  title bar that they are suspended while searching. The 15-day cap on `start`/`end`
+  price-history ranges is real, so the sparkline and `export history` use `interval`.
 - **To decide in review**: binary name (`polymarket` vs something shorter such as `pm`);
   whether live auto-refresh (`--refresh 30s`) belongs in v1.
 

@@ -1,0 +1,70 @@
+{
+  "data": [
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790859600
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790863200
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790866800
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790870400
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790874000
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790877600
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790881200
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790884800
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790888400
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790892000
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790895600
+    },
+    {
+      "price": 0.0025,
+      "resolution_seconds": 3600,
+      "timestamp": 1790899200
+    }
+  ],
+  "pagination": {
+    "has_more": true,
+    "limit": 12,
+    "next_cursor": "eyJkYXRhIjp7InR5cGUiOiJwcmljZXNfaGlzdG9yeSIsInBhcmFtcyI6eyJsIjoxMiwidHMiOjE3OTA4OTkyMDAsInNxIjoiMzYwMCIsImQiOjEyfX0sInNpZyI6ImQ5OWVkMWYxZTYwNGYzZjhkZDE5MzNiOTgwZThkNTQ2In0",
+    "offset": 0
+  }
+}

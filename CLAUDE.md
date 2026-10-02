@@ -6,7 +6,7 @@ per milestone (§10). Update its status line and record anything the live API co
 ## Commands
 
 - `make check` - what CI runs: gofmt check, vet, golangci-lint, race tests. Must pass before a commit.
-- `make smoke` - one request per endpoint against the live API (build tag `live`); not in `check` or CI.
+- `make smoke` - one request per endpoint against the live API (build tag `live`); not in `check` or CI. Its subtests need the `events` one to have run, so `-run TestLive/search` alone fails.
 - `make fixtures` - re-records `testdata/*.json` from the live API via `testdata/record.go`.
 - `golangci-lint run --build-tags live` and `go vet -tags live ./...` - `make check` does not cover `smoke_test.go`.
 - After `go get`, run `go mod tidy` before building: a new bubbles sub-package pulls in modules `go get` leaves out of `go.sum`.
@@ -23,6 +23,10 @@ per milestone (§10). Update its status line and record anything the live API co
 - `ui` screens draw with `list` (`internal/ui/list.go`), not `bubbles/table`: see `DESIGN.md` §2 for why.
 - A `ui` request keeps its context in the closure of its `tea.Cmd` and its `CancelFunc` on the screen; a message carries a generation number, and a stale one is dropped.
 - Results of requests go to every screen on the stack, keys only to the top one: a screen must ignore messages that are not its own.
+- A request's message also carries its owner (`owner *browse`): two screens of one kind can be stacked, a sub-tag under its tag.
+- The filter form is hand-rolled (`internal/ui/filter.go`), not huh: a huh `Input` cannot have its cursor blink turned off.
+- New prompts come from `newPrompt` (`internal/ui/tags.go`), which turns the blink off.
+- The filter and sort shared by `ui` and `cli` are `api.Filter` and `api.SortOrders` (`internal/api/filter.go`); a new level copies its parent's filter.
 - A `textinput` gets its cursor blink turned off (`Styles().Cursor.Blink = false`), and non-key messages are forwarded to it while it is open, or a paste never arrives.
 - The root command decides whether it has a terminal from `cmd.InOrStdin()`/`cmd.OutOrStdout()`, never `os.Stdout`: `go test` on one package inherits the real terminal.
 - `polymarket export` with `-o -` (the default) writes only data: nothing goes to stderr, since a pipe reader such as grid is drawing on that terminal.
@@ -39,6 +43,9 @@ per milestone (§10). Update its status line and record anything the live API co
 - UI tests drive `Model.Update` over `fakeClient` (`internal/ui/ui_test.go`): `press` runs a key and
   every command it sets off, `step` runs one round, and assertions read the stripped `View()`.
 - `settle` in the UI tests runs commands until none is left, so a command that re-arms itself (a tick, a blink) hangs the test.
+- `fakeClient.Events` narrows its pages by `TagID` and `TitleSearch` as the service would; the other listings are handed out as they are.
+- `politics(t)` (`internal/ui/browse_test.go`) opens a browser inside Politics, 120 columns wide: at 80 the title bar's note is cut short, so assert a whole note only at 120.
+- Tests stop the clock with `newModel` (`Options.Now` = `testNow`); a screen reads the time from `env.now`, never `time.Now`.
 - A `Model` is 80×24 until it gets a `tea.WindowSizeMsg`; rows that tie sort by name as text (`Tag 10` before `Tag 2`).
 - To look at the real thing: `tmux new-session -d -s pm -x 80 -y 24 ./polymarket`, then `tmux send-keys`
   and `tmux capture-pane -p`. Send `Escape` on its own: followed at once by a key it reads as alt+key.
@@ -53,4 +60,5 @@ per milestone (§10). Update its status line and record anything the live API co
 - A page of `/events/keyset` is 9–15 MB: `curl -s -o` it to a file and query it with `jq`; time it with `curl -w '%{time_total}'` (there is no `/usr/bin/time`).
 - `/tags/slug/{slug}` ignores case, 404s on an unknown slug and 422s on one with a space.
 - `/events/keyset` answers an unknown `tag_slug` with an empty page, not an error; check the tag with `Client.Tag` first (`findTag`).
-- Sort fields differ per listing: markets need `volumeNum`/`liquidityNum` (`order=volume` sorts as text). Go through `sortOrders` in `internal/cli/export.go`.
+- Sort fields differ per listing: markets need `volumeNum`/`liquidityNum` (`order=volume` sorts as text). Go through `api.SortOrders`.
+- `/public-search`: `limit_per_type` above 50 is silently 50, `events_tag` takes a slug (an ID matches nothing), and an open event comes with its closed markets. Go through `api.SearchMarkets`.

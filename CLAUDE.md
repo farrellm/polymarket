@@ -48,6 +48,12 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - The iterators that fetch a market's history and book (`export.HistoryPages`, `export.BookPages`) are shared by `cli` and `ui`: change them there, not in either.
 - `polymarket export` with `-o -` (the default) writes only data: nothing goes to stderr, since a pipe reader such as grid is drawing on that terminal.
 - Export columns are a contract: never rename or reorder one; add at the end and update the goldens.
+- `--extend` merges by a key per dataset in `merges` (`internal/export/extend.go`): a new extendable dataset needs an entry there, and `TestMergesNameColumnsOfTheirDatasets` checks its columns exist.
+- Flags of the output (`--limit`, `--extend`) are checked in `output.check`, which `filter()` and `query()` call before any request.
+- `--event`, `--exclude-tag` and `--exclude-title` are the list exports' only (`bindListFlags`), not the root command's filter flags; an exclusion tests a market by its event's title and by its own tags with its event's.
+- A market's trades go through `export.TradePages`, never `api.Pages` over `Client.Trades`: it applies the bounds the service ignores.
+- The Senate dataset is `scripts/senate-*.sh` into `data/senate-midterms/` (ignored), with `scripts/senate-data.md` copied in as its `CLAUDE.md`: change the description there. `shellcheck -x scripts/*.sh` must be clean.
+- `systemd/senate-extend.{service,timer}` are symlinked into `~/.config/systemd/user/`: after editing, `systemctl --user daemon-reload`. A run takes ~35 min.
 
 ## Testing
 
@@ -61,6 +67,8 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
   every command it sets off, `step` runs one round, and assertions read the stripped `View()`.
 - `settle` in the UI tests runs commands until none is left, so a command that re-arms itself (a tick, a blink) hangs the test.
 - `fakeClient.Events` narrows its pages by `TagID` and `TitleSearch` as the service would; the other listings are handed out as they are.
+- The CLI `service`'s trades are all at 1790947065 (2026-10-02T13:17:45Z): a `--since`/`--until` test must bracket that, or the rows are dropped.
+- To check a CSV of the real data, use DuckDB (`pip install duckdb` in a scratch venv), not `awk -F,`: questions hold commas. Name `outcome` and `token_id` VARCHAR, or it guesses BOOLEAN and DOUBLE.
 - `fakeClient` answers a token not in `books` with a 404, which is a market not trading; `history` is keyed `"<token> <interval>"`.
 - `market()` names its slug, condition ID and tokens after its ID (`slug-m2`, `0xm2`, `m2-yes`) and quotes it a cent either side of its price.
 - `bob(t)` (`internal/ui/detail_test.go`) opens the detail of `nominee`'s busiest market; pick a pane's line with `find(t, m, text)`, since the panes move with the height.
@@ -94,3 +102,7 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - `/markets/slug/{slug}` is case-sensitive and brings the event; `/markets/{id}` brings neither event nor tags, and 422s on an ID of twelve digits.
 - `include_tag=true` adds about a fifth to a page of `/markets/keyset` (890 KB against 750 KB); the browser asks with it so that loaded markets export with their tags.
 - The Data API refuses a `limit` over its maximum with a 400 (trades 1000, history 10000) where Gamma silently caps it.
+- `/v2/trades` accepts `start`/`end` and ignores them (v1 `/trades?market=` honours `start`).
+- Rate limits are per 10 s: prices-history 200, Gamma `/markets` 300, `/events` 500, book 1500; over them requests are delayed, not refused. The client's 10 req/s is per process, so parallel CLI runs multiply it.
+- A market's own tags differ from its event's, and one in `/markets/keyset` comes with an event that has none: select by event (`--event`), not by the markets listing's tag, when the events decide.
+- An open market may have no book (not taking orders yet, e.g. "a candidate not listed above"); 283 of the Senate markets embedded in events have no `endDate` of their own.

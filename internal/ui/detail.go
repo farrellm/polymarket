@@ -967,10 +967,7 @@ func (d *detail) exports() []exportChoice {
 			label: "all of them",
 			open: func(ctx context.Context) export.Dataset {
 				q := api.TradesQuery{ConditionID: m.ConditionID, Limit: tradesPageSize}
-				return export.Trades(api.Pages(ctx, func(cursor string) ([]api.Trade, string, error) {
-					q.Cursor = cursor
-					return client.Trades(ctx, q)
-				}))
+				return export.Trades(export.TradePages(ctx, client, q))
 			},
 		})
 	}

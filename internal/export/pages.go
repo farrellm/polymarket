@@ -18,6 +18,11 @@ type BookSource interface {
 	Book(ctx context.Context, tokenID string) (*api.Book, error)
 }
 
+// TradeSource is where a market's trades are fetched from. *api.Client is one.
+type TradeSource interface {
+	Trades(ctx context.Context, q api.TradesQuery) (trades []api.Trade, next string, err error)
+}
+
 // Tradable are the outcomes of a market that can be asked about, by their
 // index: those with a token. A market that has not opened has none.
 func Tradable(m *api.Market) []int {
@@ -49,6 +54,40 @@ func HistoryPages(ctx context.Context, c HistorySource, m *api.Market, outcomes 
 				if !yield([]Series{{Market: m, Outcome: index, Points: points}}, nil) {
 					return
 				}
+			}
+		}
+	}
+}
+
+// TradePages pages through the trades of a market, newest first, keeping
+// those from q.Start up to but not including q.End. The service takes both
+// bounds and ignores them, so they are applied here: a trade at or after End
+// is dropped, and the paging stops at the first one before Start, which an
+// extension of a file relies on to ask for one page rather than all of them.
+func TradePages(ctx context.Context, c TradeSource, q api.TradesQuery) iter.Seq2[[]api.Trade, error] {
+	return func(yield func([]api.Trade, error) bool) {
+		pages := api.Pages(ctx, func(cursor string) ([]api.Trade, string, error) {
+			q.Cursor = cursor
+			return c.Trades(ctx, q)
+		})
+		for trades, err := range pages {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			var kept []api.Trade
+			past := false
+			for _, t := range trades {
+				switch {
+				case !q.End.IsZero() && !t.Time.Before(q.End):
+				case !q.Start.IsZero() && t.Time.Before(q.Start):
+					past = true
+				default:
+					kept = append(kept, t)
+				}
+			}
+			if !yield(kept, nil) || past {
+				return
 			}
 		}
 	}

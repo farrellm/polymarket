@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -49,6 +51,10 @@ type listFlags struct {
 	minLiquidity float64
 	endsAfter    string
 	endsBefore   string
+	// excludeTags, excludeTitles and events are the list exports' alone.
+	excludeTags   []string
+	excludeTitles []string
+	events        []string
 	output
 }
 
@@ -58,14 +64,22 @@ type filter struct {
 	search  string
 	// ordered is true when --order was given, rather than defaulted.
 	ordered bool
+	// excludeTags and excludeTitles drop events, and the markets of events,
+	// filed under a tag or with a title containing a text (lower-cased).
+	excludeTags   []string
+	excludeTitles []string
+	// events are the IDs of the events whose markets are wanted, in place of
+	// a listing.
+	events []string
 	api.Filter
 }
 
 func (lf *listFlags) filter() (filter, error) {
 	f := filter{
-		tagSlug: lf.tag,
-		search:  strings.TrimSpace(lf.search),
-		ordered: lf.order != "",
+		tagSlug:     lf.tag,
+		search:      strings.TrimSpace(lf.search),
+		ordered:     lf.order != "",
+		excludeTags: lf.excludeTags,
 		Filter: api.Filter{
 			VolumeMin:    lf.minVolume,
 			LiquidityMin: lf.minLiquidity,
@@ -100,10 +114,83 @@ func (lf *listFlags) filter() (filter, error) {
 	if lf.minVolume < 0 || lf.minLiquidity < 0 {
 		return filter{}, errors.New("--min-volume and --min-liquidity cannot be negative")
 	}
-	if lf.limit < 0 {
-		return filter{}, errors.New("--limit cannot be negative")
+	for _, text := range lf.excludeTitles {
+		if text = strings.TrimSpace(text); text == "" {
+			return filter{}, errors.New("--exclude-title needs some text")
+		}
+		f.excludeTitles = append(f.excludeTitles, strings.ToLower(text))
+	}
+	for _, id := range lf.events {
+		if id = strings.TrimSpace(id); id == "" {
+			return filter{}, errors.New("--event needs the ID of an event")
+		}
+		f.events = append(f.events, id)
+	}
+	if len(f.events) > 0 && (f.tagSlug != "" || f.search != "" || f.ordered) {
+		return filter{}, errors.New("--event names the events: it does not go with --tag, --search or --order")
+	}
+	if err := lf.check(); err != nil {
+		return filter{}, err
 	}
 	return f, nil
+}
+
+// excludes reports whether an event of this title and these tags is to be
+// left out.
+func (f filter) excludes(title string, tags []api.Tag) bool {
+	title = strings.ToLower(title)
+	for _, text := range f.excludeTitles {
+		if strings.Contains(title, text) {
+			return true
+		}
+	}
+	for _, t := range tags {
+		if slices.ContainsFunc(f.excludeTags, func(slug string) bool { return strings.EqualFold(slug, t.Slug) }) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f filter) keepsEvent(e *api.Event) bool {
+	return !f.excludes(e.Title, e.Tags)
+}
+
+// keepsMarket tests a market by its event: the event's title, and its tags
+// along with the market's own, since a market in a listing comes with an
+// event that has none.
+func (f filter) keepsMarket(m *api.Market) bool {
+	if len(m.Events) == 0 {
+		return !f.excludes(m.Question, m.Tags)
+	}
+	ev := &m.Events[0]
+	return !f.excludes(ev.Title, append(slices.Clone(m.Tags), ev.Tags...))
+}
+
+// excluding is the pages with the items that keep does not keep taken out,
+// or the pages as they are if there is nothing to exclude. A page may be left
+// empty, and the paging goes on.
+func excluding[T any](f filter, pages iter.Seq2[[]T, error], keep func(filter, *T) bool) iter.Seq2[[]T, error] {
+	if len(f.excludeTags) == 0 && len(f.excludeTitles) == 0 {
+		return pages
+	}
+	return func(yield func([]T, error) bool) {
+		for page, err := range pages {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			var kept []T
+			for i := range page {
+				if keep(f, &page[i]) {
+					kept = append(kept, page[i])
+				}
+			}
+			if !yield(kept, nil) {
+				return
+			}
+		}
+	}
 }
 
 // parseDate reads the date a flag was given; empty is no bound.
@@ -138,14 +225,17 @@ func eventPages(ctx context.Context, c *api.Client, f filter, limit int) (iter.S
 	q.Limit = limit
 	q.TagSlug = f.tagSlug
 	q.TitleSearch = f.search
-	return api.Pages(ctx, func(cursor string) ([]api.Event, string, error) {
+	return excluding(f, api.Pages(ctx, func(cursor string) ([]api.Event, string, error) {
 		q.Cursor = cursor
 		return c.Events(ctx, q)
-	}), nil
+	}), filter.keepsEvent), nil
 }
 
 // marketPages pages through the markets the filter selects, each with its
-// tags.
+// tags, less those of the events excluded.
+//
+// With --event they are the markets of those events instead, each given its
+// event and the event's tags, and narrowed by the status, floors and dates.
 //
 // The markets listing has no text search, so --search goes through the
 // search of events instead and takes their markets. That search ranks by
@@ -157,35 +247,65 @@ func marketPages(ctx context.Context, c *api.Client, f filter, limit int) (iter.
 	if err != nil {
 		return nil, err
 	}
-	if f.search != "" {
+	var pages iter.Seq2[[]api.Market, error]
+	switch {
+	case len(f.events) > 0:
+		pages = eventMarkets(ctx, c, f)
+	case f.search != "":
 		if f.ordered {
 			return nil, errors.New("--order does not apply to a --search of markets, which is ranked by relevance")
 		}
-		return api.Pages(ctx, func(cursor string) ([]api.Market, string, error) {
+		pages = api.Pages(ctx, func(cursor string) ([]api.Market, string, error) {
 			return api.SearchMarkets(ctx, c, f.Filter, f.search, f.tagSlug, cursor)
-		}), nil
+		})
+	default:
+		q := f.MarketsQuery()
+		q.Limit = limit
+		q.IncludeTags = true
+		q.TagID = tag.ID
+		pages = api.Pages(ctx, func(cursor string) ([]api.Market, string, error) {
+			q.Cursor = cursor
+			return c.Markets(ctx, q)
+		})
 	}
-	q := f.MarketsQuery()
-	q.Limit = limit
-	q.IncludeTags = true
-	q.TagID = tag.ID
-	return api.Pages(ctx, func(cursor string) ([]api.Market, string, error) {
-		q.Cursor = cursor
-		return c.Markets(ctx, q)
-	}), nil
+	return excluding(f, pages, filter.keepsMarket), nil
+}
+
+// eventMarkets fetches the events --event names, one a page, and yields the
+// markets of each that the filter keeps.
+func eventMarkets(ctx context.Context, c *api.Client, f filter) iter.Seq2[[]api.Market, error] {
+	return func(yield func([]api.Market, error) bool) {
+		for _, id := range f.events {
+			ev, err := c.Event(ctx, id)
+			var apiErr *api.Error
+			if api.IsNotFound(err) || errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity {
+				err = fmt.Errorf("there is no event with the ID %q", id)
+			}
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if !yield(f.MarketsOf([]api.Event{*ev}), nil) {
+				return
+			}
+		}
+	}
 }
 
 // listDataset is one of the datasets drawn from a listing.
 type listDataset struct {
 	name, short string
+	// ofEvents is true for a dataset of markets, which --event can select.
+	ofEvents bool
 	// open starts the listing; pageLimit is the page size to ask for.
 	open func(ctx context.Context, c *api.Client, f filter, pageLimit int) (export.Dataset, error)
 }
 
 var listDatasets = []listDataset{
 	{
-		name:  "markets",
-		short: "one row per market, with its first two outcomes",
+		name:     "markets",
+		short:    "one row per market, with its first two outcomes",
+		ofEvents: true,
 		open: func(ctx context.Context, c *api.Client, f filter, pageLimit int) (export.Dataset, error) {
 			pages, err := marketPages(ctx, c, f, pageLimit)
 			if err != nil {
@@ -206,8 +326,9 @@ var listDatasets = []listDataset{
 		},
 	},
 	{
-		name:  "outcomes",
-		short: "one row per market and outcome",
+		name:     "outcomes",
+		short:    "one row per market and outcome",
+		ofEvents: true,
 		open: func(ctx context.Context, c *api.Client, f filter, pageLimit int) (export.Dataset, error) {
 			pages, err := marketPages(ctx, c, f, pageLimit)
 			if err != nil {
@@ -256,13 +377,22 @@ func newListCommand(o *options, d listDataset) *cobra.Command {
 		},
 	}
 	bindListFlags(cmd, &lf)
+	if d.ofEvents {
+		cmd.Flags().StringArrayVar(&lf.events, "event", nil,
+			"the markets of the event with this ID, in place of a listing (repeatable)")
+	}
 	return cmd
 }
 
 // bindListFlags gives cmd the flags the list datasets share, parsed into lf.
 func bindListFlags(cmd *cobra.Command, lf *listFlags) {
 	bindFilterFlags(cmd, lf)
-	cmd.Flags().StringVar(&lf.search, "search", "", "only what matches this text: an event by its title, a market by its event")
+	f := cmd.Flags()
+	f.StringVar(&lf.search, "search", "", "only what matches this text: an event by its title, a market by its event")
+	f.StringArrayVar(&lf.excludeTags, "exclude-tag", nil,
+		"leave out what is filed under the tag with this slug: an event, or a market by it or its event (repeatable)")
+	f.StringArrayVar(&lf.excludeTitles, "exclude-title", nil,
+		"leave out an event whose title contains this text, in any case, and its markets (repeatable)")
 	lf.bind(cmd)
 }
 
@@ -317,9 +447,10 @@ func pageLimit(most, limit int) int {
 // output is where a dataset is to be written, and how: the flags every
 // dataset shares.
 type output struct {
-	path  string
-	limit int
-	raw   bool
+	path   string
+	limit  int
+	raw    bool
+	extend bool
 }
 
 // bind gives cmd the flags that say where the rows go.
@@ -328,6 +459,19 @@ func (out *output) bind(cmd *cobra.Command) {
 	f.IntVar(&out.limit, "limit", 0, "write at most this many rows (default: all of them)")
 	f.StringVarP(&out.path, "output", "o", "-", "write to this file; - is standard output")
 	f.BoolVar(&out.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets")
+	f.BoolVar(&out.extend, "extend", false,
+		"merge into the file -o names, an earlier export of the same dataset, rather than replace it")
+}
+
+// check rejects output flags that cannot go together, before any request.
+func (out *output) check() error {
+	switch {
+	case out.limit < 0:
+		return errors.New("--limit cannot be negative")
+	case out.extend && out.path == "-":
+		return errors.New("--extend needs -o to name the file to extend")
+	}
+	return nil
 }
 
 // write runs the export, to standard output or to the file named.
@@ -349,12 +493,16 @@ func write(cmd *cobra.Command, ds export.Dataset, out output) error {
 		p = &progress{w: stderr}
 		opts.Progress = p.update
 	}
-	sum, err := export.File(ctx, ds, out.path, opts)
+	file, outcome := export.File, " was not written"
+	if out.extend {
+		file, outcome = export.Extend, " was left as it was"
+	}
+	sum, err := file(ctx, ds, out.path, opts)
 	p.clear()
 	if err != nil {
-		return interrupted(ctx, err, out.path+" was not written")
+		return interrupted(ctx, err, out.path+outcome)
 	}
-	reportSummary(stderr, sum, out.path, out.limit)
+	reportSummary(stderr, sum, out)
 	return nil
 }
 
@@ -369,18 +517,27 @@ func interrupted(ctx context.Context, err error, outcome string) error {
 
 // reportSummary says what was written, and what was not. Like the progress
 // below it, it is a courtesy: failing to write it is not worth an error.
-func reportSummary(w io.Writer, sum export.Summary, path string, limit int) {
-	rows := strconv.Itoa(sum.Rows) + " rows"
-	if sum.Rows == 1 {
-		rows = "1 row"
+func reportSummary(w io.Writer, sum export.Summary, out output) {
+	if out.extend {
+		_, _ = fmt.Fprintf(w, "extended %s in %s: %s, %d in all\n",
+			sum.Dataset, out.path, countRows(sum.Added, "new "), sum.Total)
+	} else {
+		_, _ = fmt.Fprintf(w, "wrote %s of %s to %s\n", countRows(sum.Rows, ""), sum.Dataset, out.path)
 	}
-	_, _ = fmt.Fprintf(w, "wrote %s of %s to %s\n", rows, sum.Dataset, path)
 	if sum.Capped {
-		_, _ = fmt.Fprintf(w, "note: stopped at the --limit of %d; more rows match\n", limit)
+		_, _ = fmt.Fprintf(w, "note: stopped at the --limit of %d; more rows match\n", out.limit)
 	}
 	for _, note := range sum.Notes {
 		_, _ = fmt.Fprintln(w, "note:", note)
 	}
+}
+
+// countRows is "n rows", with what before "rows".
+func countRows(n int, what string) string {
+	if n == 1 {
+		return "1 " + what + "row"
+	}
+	return strconv.Itoa(n) + " " + what + "rows"
 }
 
 // progress keeps a running row count on one line of a terminal.

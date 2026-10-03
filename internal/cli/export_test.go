@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -94,6 +95,15 @@ func TestListFlagsToFilter(t *testing.T) {
 				f.EndDateMax = day.Add(24*time.Hour + 30*time.Minute)
 			},
 		},
+		{
+			name: "exclusions, repeated; a title is matched in lower case",
+			args: []string{"--exclude-tag", "primaries", "--exclude-tag", "senate-primary",
+				"--exclude-title", " State Senate ", "--exclude-title", "primary"},
+			want: func(f *filter) {
+				f.excludeTags = []string{"primaries", "senate-primary"}
+				f.excludeTitles = []string{"state senate", "primary"}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -115,7 +125,7 @@ func TestListFlagsToFilter(t *testing.T) {
 			}
 			want := filter{Filter: api.DefaultFilter()}
 			tt.want(&want)
-			if got != want {
+			if !reflect.DeepEqual(got, want) {
 				t.Errorf("filter = %+v\nwant     %+v", got, want)
 			}
 		})
@@ -132,6 +142,11 @@ func TestListFlagsRejected(t *testing.T) {
 		{"a date that is not one", listFlags{endsAfter: "next week"}, "--ends-after"},
 		{"a negative floor", listFlags{minVolume: -1}, "negative"},
 		{"a negative limit", listFlags{output: output{limit: -1}}, "--limit"},
+		{"an extension of stdout", listFlags{output: output{path: "-", extend: true}}, "--extend needs -o"},
+		{"an empty excluded title", listFlags{excludeTitles: []string{" "}}, "--exclude-title"},
+		{"events with a tag", listFlags{events: []string{"9"}, tag: "politics"}, "--event"},
+		{"events with a search", listFlags{events: []string{"9"}, search: "x"}, "--event"},
+		{"events with an order", listFlags{events: []string{"9"}, order: "endDate"}, "--event"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -322,6 +337,8 @@ func newService(t *testing.T) *service {
 				return
 			}
 			w.Write([]byte(`{"events": [` + eventOne + `], "next_cursor": "page2"}`))
+		case "/gamma/events/9":
+			w.Write([]byte(eventOne))
 		case "/gamma/markets/slug/first", "/gamma/markets/1":
 			w.Write([]byte(marketOne))
 		case "/gamma/markets/999999999999":
@@ -586,6 +603,59 @@ func TestExportToFileReportsTheCap(t *testing.T) {
 	}
 }
 
+func TestExportMarketsOfEvents(t *testing.T) {
+	s := newService(t)
+	stdout, _, err := s.run(t, "export", "markets", "--event", "9", "--all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := readCSV(t, stdout)
+	wantCells(t, records, "id", "1", "2")
+	// Each market is given its event, which the event's own markets lack.
+	wantCells(t, records, "event_title", "Ev", "Ev")
+	if n := len(s.asked("/gamma/events/9")); n != 1 {
+		t.Errorf("%d requests for the event, want 1", n)
+	}
+	if n := len(s.asked("/gamma/markets/keyset")); n != 0 {
+		t.Errorf("%d requests for the listing, want none", n)
+	}
+
+	if _, _, err := s.run(t, "export", "markets", "--event", "404"); err == nil ||
+		!strings.Contains(err.Error(), `no event with the ID "404"`) {
+		t.Errorf("err = %v, want it to name the missing event", err)
+	}
+}
+
+func TestExportExcluding(t *testing.T) {
+	tests := []struct {
+		args []string
+		ids  []string
+	}{
+		// The first market is filed under politics, and the second is not.
+		{[]string{"markets", "--exclude-tag", "POLITICS"}, []string{"2"}},
+		// Both are of the event "Ev".
+		{[]string{"markets", "--exclude-title", "ev"}, nil},
+		{[]string{"outcomes", "--event", "9", "--exclude-tag", "politics"}, []string{"2", "2", "2"}},
+		{[]string{"events", "--exclude-title", "nothing like it"}, []string{"9"}},
+		{[]string{"events", "--exclude-title", "E"}, nil},
+	}
+	for _, tt := range tests {
+		s := newService(t)
+		stdout, _, err := s.run(t, append([]string{"export"}, tt.args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records := readCSV(t, stdout)
+		name := "id"
+		if tt.args[0] == "outcomes" {
+			name = "market_id"
+		}
+		if got := cells(t, records, name); strings.Join(got, " ") != strings.Join(tt.ids, " ") {
+			t.Errorf("%v: %s = %q, want %q", tt.args, name, got, tt.ids)
+		}
+	}
+}
+
 func TestExportUnknownTag(t *testing.T) {
 	s := newService(t)
 	for _, dataset := range []string{"markets", "events", "outcomes"} {
@@ -624,6 +694,10 @@ func TestExportRejectsBadUsage(t *testing.T) {
 		{"export", "trades", "--market", "first", "--since", "soon"},
 		{"export", "trades", "--market", "first", "--since", "2026-10-02", "--until", "2026-10-01"},
 		{"export", "book", "--market", "first", "--limit", "-1"},
+		{"export", "trades", "--market", "first", "--extend"},
+		{"export", "markets", "--extend"},
+		{"export", "markets", "--event", "9", "--tag", "politics"},
+		{"export", "events", "--event", "9"},
 	} {
 		if _, _, err := s.run(t, args...); err == nil {
 			t.Errorf("%v was accepted, want an error", args)

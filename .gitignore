@@ -38,3 +38,6 @@ coverage.out
 # Stray exports
 /*.csv
 !testdata/**/*.csv
+
+# Datasets the scripts write
+/data/

@@ -177,9 +177,55 @@ that reads CSV.
 
 The list flags are the ones the browser starts with: `--tag`, `--search`,
 `--closed` or `--all`, `--order` with `--desc`, `--min-volume`,
-`--min-liquidity`, `--ends-after` and `--ends-before`. Every dataset takes
-`--limit`, `-o` and `--raw`. `polymarket export <dataset> --help` has the
-details. The `tags` dataset is the browser's alone.
+`--min-liquidity`, `--ends-after` and `--ends-before`; the exports add
+`--exclude-tag` and `--exclude-title` to leave events out, and `markets` and
+`outcomes` take `--event ID` for the markets of given events. Every dataset
+takes `--limit`, `-o`, `--raw` and `--extend`. `polymarket export <dataset>
+--help` has the details. The `tags` dataset is the browser's alone.
+
+### Extending a file
+
+`--extend` merges an export into the file `-o` names, made earlier by the
+same dataset, instead of replacing it: rows already there are updated, new
+ones added, and none lost. With no file there it simply writes one.
+
+```
+polymarket export trades --market <slug|id> --extend -o trades.csv
+polymarket export markets --tag senate-midterms --all --extend -o markets.csv
+```
+
+`trades` then fetches only the trades since the newest one in the file. A
+history extended with `--interval 1w` at least weekly keeps the five-minute
+points the service only holds for a week.
+
+### The Senate midterms dataset
+
+```
+scripts/senate-dump.sh            # the first dump, into data/senate-midterms
+scripts/senate-extend.sh          # bring it up to date
+```
+
+The events of the 2026 US Senate races, control of the Senate and its
+leaders (less primaries, state legislatures and the French Senate), their
+markets and outcomes, and every market's price history, trades and order
+book. `POLYMARKET` names the binary and `JOBS` how many markets are fetched at
+once (2, which keeps within Polymarket's rate limits).
+
+`systemd/` has a user timer that runs the extension daily at 02:00, with the
+binary built from the checkout first. The units are symlinked rather than
+copied, so a `systemctl --user daemon-reload` after editing them is the whole
+deploy:
+
+```
+ln -s "$PWD"/systemd/senate-extend.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now senate-extend.timer
+journalctl --user -u senate-extend    # how the last runs went
+```
+
+The dump has to have been made first, into `data/senate-midterms`. A run
+missed while the machine was off happens at the next boot; the user manager
+must linger (`loginctl enable-linger`) for it to run while you are logged out.
 
 ### The files
 

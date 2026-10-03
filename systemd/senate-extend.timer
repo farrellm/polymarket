@@ -1,0 +1,18 @@
+# Tracked in the repo at systemd/senate-extend.timer, and installed into
+# ~/.config/systemd/user/ as a SYMLINK to it (see README, "The Senate midterms
+# dataset"), so editing it here and running `systemctl --user daemon-reload` is
+# the whole deploy.
+[Unit]
+Description=Daily extension of the 2026 Senate midterms dataset
+Documentation=file:///home/farrellm/workspace/polymarket/README.md
+
+[Timer]
+OnCalendar=*-*-* 02:00
+# A run missed while the machine was off fires on the next boot instead of
+# being skipped: the five-minute history the service keeps covers only the
+# last week, so a gap of more than a week of runs is a hole in it.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

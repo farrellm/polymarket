@@ -73,8 +73,8 @@ func (mf *marketFlags) query() (marketQuery, error) {
 	if !q.since.IsZero() && !q.until.IsZero() && q.until.Before(q.since) {
 		return marketQuery{}, errors.New("--until is earlier than --since")
 	}
-	if mf.limit < 0 {
-		return marketQuery{}, errors.New("--limit cannot be negative")
+	if err := mf.check(); err != nil {
+		return marketQuery{}, err
 	}
 	return q, nil
 }
@@ -124,6 +124,9 @@ type marketDataset struct {
 	bind func(cmd *cobra.Command, mf *marketFlags)
 	// open starts the dataset for the market found; limit is the --limit.
 	open func(ctx context.Context, c *api.Client, m *api.Market, q marketQuery, limit int) (export.Dataset, error)
+	// resume, if set, narrows the query of an --extend to what the file at
+	// path does not hold yet.
+	resume func(path string, q *marketQuery) error
 }
 
 func bindOutcomeFlag(cmd *cobra.Command, mf *marketFlags) {
@@ -176,10 +179,17 @@ var marketDatasets = []marketDataset{
 				Start:       q.since,
 				End:         q.until,
 			}
-			return export.Trades(api.Pages(ctx, func(cursor string) ([]api.Trade, string, error) {
-				tq.Cursor = cursor
-				return c.Trades(ctx, tq)
-			})), nil
+			return export.Trades(export.TradePages(ctx, c, tq)), nil
+		},
+		// Without --since, an extension starts at the newest trade the file
+		// holds: those of that second are fetched again, and merged away.
+		resume: func(path string, q *marketQuery) error {
+			if !q.since.IsZero() {
+				return nil
+			}
+			var err error
+			q.since, err = export.Newest(path, "timestamp")
+			return err
 		},
 	},
 	{
@@ -224,6 +234,11 @@ func runMarket(cmd *cobra.Command, o *options, d marketDataset, mf *marketFlags)
 	}
 	ctx := cmd.Context()
 	client := o.client()
+	if mf.extend && d.resume != nil {
+		if err := d.resume(mf.path, &q); err != nil {
+			return err
+		}
+	}
 	m, err := findMarket(ctx, client, q.ref)
 	if err != nil {
 		return err

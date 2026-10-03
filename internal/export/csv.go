@@ -30,6 +30,9 @@ type Summary struct {
 	Capped bool
 	// Notes are the dataset's own remarks on what it left out.
 	Notes []string
+	// Added and Total are set by Extend: the rows written that the file did
+	// not hold before, and the rows it holds now.
+	Added, Total int
 }
 
 // Run writes the dataset to w as CSV: RFC 4180, UTF-8, \n line endings and
@@ -37,30 +40,48 @@ type Summary struct {
 // cancelled, and reports how far it got.
 func Run(ctx context.Context, d Dataset, w io.Writer, o Options) (Summary, error) {
 	sum := Summary{Dataset: d.Name()}
-	columns := d.Columns()
 	cw := csv.NewWriter(w)
+	if err := cw.Write(header(d.Columns())); err != nil {
+		return sum, err
+	}
+	if err := each(ctx, d, o, &sum, cw.Write); err != nil {
+		return sum, err
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return sum, err
+	}
+	sum.Notes = d.Notes()
+	return sum, nil
+}
 
+func header(columns []Column) []string {
 	cells := make([]string, len(columns))
 	for i, c := range columns {
 		cells[i] = c.Name
 	}
-	if err := cw.Write(cells); err != nil {
-		return sum, err
-	}
+	return cells
+}
 
+// each hands the dataset's rows to emit as they are to be written, guarded
+// unless o.Raw, counting them in sum and stopping at the limit. The slice
+// handed over is reused for the next row.
+func each(ctx context.Context, d Dataset, o Options, sum *Summary, emit func([]string) error) error {
+	columns := d.Columns()
+	cells := make([]string, len(columns))
 	for row, err := range d.Rows() {
 		if err != nil {
-			return sum, err
+			return err
 		}
 		if err := ctx.Err(); err != nil {
-			return sum, err
+			return err
 		}
 		if o.Limit > 0 && sum.Rows == o.Limit {
 			sum.Capped = true
 			break
 		}
 		if len(row) != len(columns) {
-			return sum, fmt.Errorf("export %s: a row has %d cells for %d columns", d.Name(), len(row), len(columns))
+			return fmt.Errorf("export %s: a row has %d cells for %d columns", d.Name(), len(row), len(columns))
 		}
 		for i, cell := range row {
 			if !o.Raw && columns[i].Kind == Text {
@@ -68,21 +89,15 @@ func Run(ctx context.Context, d Dataset, w io.Writer, o Options) (Summary, error
 			}
 			cells[i] = cell
 		}
-		if err := cw.Write(cells); err != nil {
-			return sum, err
+		if err := emit(cells); err != nil {
+			return err
 		}
 		sum.Rows++
 		if o.Progress != nil {
 			o.Progress(sum.Rows)
 		}
 	}
-
-	cw.Flush()
-	if err := cw.Error(); err != nil {
-		return sum, err
-	}
-	sum.Notes = d.Notes()
-	return sum, nil
+	return nil
 }
 
 // guard keeps a spreadsheet from evaluating a text cell as a formula, by
@@ -99,10 +114,22 @@ func guard(cell string) string {
 // of them are written, so an export that fails or is cancelled leaves
 // neither a partial file nor a damaged earlier one.
 func File(ctx context.Context, d Dataset, path string, o Options) (sum Summary, err error) {
+	sum = Summary{Dataset: d.Name()}
+	err = replace(path, func(w io.Writer) error {
+		var runErr error
+		sum, runErr = Run(ctx, d, w, o)
+		return runErr
+	})
+	return sum, err
+}
+
+// replace writes path through write, by way of path.tmp, which is renamed
+// into place if write succeeds and removed if it does not.
+func replace(path string, write func(w io.Writer) error) (err error) {
 	tmp := path + ".tmp"
 	f, err := os.Create(tmp)
 	if err != nil {
-		return Summary{Dataset: d.Name()}, err
+		return err
 	}
 	defer func() {
 		if err != nil {
@@ -111,14 +138,11 @@ func File(ctx context.Context, d Dataset, path string, o Options) (sum Summary, 
 		}
 	}()
 
-	if sum, err = Run(ctx, d, f, o); err != nil {
-		return sum, err
+	if err = write(f); err != nil {
+		return err
 	}
 	if err = f.Close(); err != nil {
-		return sum, err
+		return err
 	}
-	if err = os.Rename(tmp, path); err != nil {
-		return sum, err
-	}
-	return sum, nil
+	return os.Rename(tmp, path)
 }

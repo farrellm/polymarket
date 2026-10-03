@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) implemented: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) and 8 (`--extend`, `--event`, `--exclude-tag`/`--exclude-title`, the trades bounded client-side, and the Senate midterms scripts) implemented: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02. The trades' `start` and `end` were found ignored, and the documented rate limits read, on 2026-10-02.
 
 ## 1. Summary
 
@@ -80,9 +80,11 @@ internal/api/               HTTP client for the three services
     pager.go                generic cursor iterator
 internal/export/            datasets -> CSV (no UI imports)
     dataset.go              Dataset interface, column schemas
-    pages.go                the iterators that fetch a market's history and book as
-                            they are read, for the command line and the browser alike
+    pages.go                the iterators that fetch a market's history, trades and
+                            book as they are read, for the command line and the
+                            browser alike
     csv.go                  writer: temp file + atomic rename, or stdout
+    extend.go               merging an export into an earlier file of it
 internal/format/            money ($1.2M), price (66.5¢), deltas (+3.5¢), relative dates (2y)
 internal/ui/                Bubble Tea models
     model.go                root model: screen stack, size, frame, breadcrumb, status bar, routing
@@ -98,6 +100,9 @@ internal/ui/                Bubble Tea models
     open.go                 handing a page to the system's browser
     exportdlg.go            the export dialog, and the export it sets running
 testdata/                   recorded API responses; golden/ holds the golden CSVs
+scripts/                    senate-dump.sh, senate-extend.sh and what they share:
+                            the 2026 Senate midterms dataset (§6)
+systemd/                    senate-extend.{service,timer}: the extension daily at 02:00
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
 ```
 
@@ -128,7 +133,7 @@ All endpoints are public and unauthenticated. Three services:
 | `GET /public-search?q=` | `limit_per_type` (silently at most 50), `page` (from 1), `events_status` (`active` or `resolved`), `events_tag` (a slug; an ID matches nothing); returns `{events, pagination:{hasMore,totalResults}}`, with no `events` member at all when nothing matches |
 | `GET clob/book?token_id=` | `bids`, `asks` (`{price,size}` strings), `tick_size`, `min_order_size`, `last_trade_price`, `timestamp` |
 | `GET data/v2/prices-history?token_id=` | `interval` = `1h`/`6h`/`1d`/`1w`/`1m`/`max`, or `start`/`end` epoch seconds (a range of at most 15 days, else 400); `bucket_seconds`; `limit` ≤ 10000, `cursor`. Returns `{data:[{timestamp,price,resolution_seconds}], pagination}` |
-| `GET data/v2/trades?condition=` | `limit` ≤ 1000 (more is a 400), `cursor`, `start`, `end`, `side`. Returns `{data:[…], pagination:{has_more,next_cursor}}`, newest first, the trades of every outcome of the market together |
+| `GET data/v2/trades?condition=` | `limit` ≤ 1000 (more is a 400), `cursor`, `side`; `start` and `end` are taken and ignored (below). Returns `{data:[…], pagination:{has_more,next_cursor}}`, newest first, the trades of every outcome of the market together |
 
 ### Where the tag list comes from
 
@@ -196,6 +201,11 @@ of those.
   (Data API), and epoch milliseconds in a string (the CLOB book). `api.Time` reads all three.
 - `/book` lists both sides worst price first; the client re-sorts them best first.
 - On the Data API the end of a listing is `has_more: false`, not a missing cursor.
+- `/v2/trades` accepts `start` and `end` and ignores them: the same newest trades come
+  back whatever they are (also `from`, `after`). The v1 `/trades?market=` honours
+  `start`. The client still sends them, and `export.TradePages` applies them: a trade at
+  or after `end` is dropped, and the paging stops at the first before `start`, the
+  trades being newest first, so a bounded fetch asks for the pages it needs and no more.
 - `/public-search` honours fewer filters than the listings: a status and a tag, but no
   volume, liquidity or end-date bounds, and it ranks by relevance whatever `sort` is
   given. An unknown `events_status` is ignored rather than refused. The status is the
@@ -232,8 +242,10 @@ of those.
 - One `api.Client` with injectable base URLs (tests point them at `httptest`).
 - Every method takes a `context.Context`; none is stored in a struct (`containedctx` lint).
 - Limiter: 10 req/s, burst 20, shared across services. Documented limits are far higher
-  (Gamma `/events` 500 and `/markets` 300 per 10 s; Data `/v2/prices-history` 200 per 10 s),
-  so this is politeness, not necessity.
+  (per 10 s: Gamma `/events` 500 and `/markets` 300; Data `/v2/prices-history` 200 and
+  v2 as a whole 800, with no figure for `/v2/trades`; CLOB `/book` 1500), so this is
+  politeness, not necessity. Over a limit, the documentation says, requests are delayed
+  rather than refused. The limiter is per process: the scripts' `JOBS` multiplies it.
 - Retry on 429, 5xx and a request that got no answer (connection error, timeout): up to 3
   attempts, exponential backoff with jitter, honouring `Retry-After` up to 30 s. 4xx other
   than 429 is returned as a typed `*api.Error{Status, Body, URL}` without retrying.
@@ -525,9 +537,13 @@ other command. The list datasets (`markets`, `events`, `outcomes`) share one set
 | `--order FIELD`, `--desc` | `volume24hr`, `volume1wk`, `volume1mo`, `volume`, `liquidity`, `endDate`, `startDate`; ascending unless `--desc`. Without `--order` the sort is `volume24hr`, largest first |
 | `--min-volume`, `--min-liquidity` | floors |
 | `--ends-after`, `--ends-before` | a date (`2026-11-03`, midnight UTC) or an RFC 3339 timestamp |
+| `--exclude-tag SLUG` | leave out an event filed under the tag, or a market filed under it or of an event that is (repeatable) |
+| `--exclude-title TEXT` | leave out an event whose title contains the text, ignoring case, or a market of one (repeatable) |
+| `--event ID` | `markets`, `outcomes`: the markets of this event, in place of a listing (repeatable; not with `--tag`, `--search` or `--order`) |
 | `--limit N` | at most N rows; the default headless is all of them |
 | `-o FILE` | the file to write; the default, `-`, is stdout |
 | `--raw` | no formula guard |
+| `--extend` | merge into the file `-o` names rather than replace it (below) |
 
 Stdout is the default output, so `polymarket export markets | grid` works. Writing there
 prints nothing else at all: stderr is usually the terminal the reader of the pipe is
@@ -561,12 +577,88 @@ last three, and name their market instead:
 error if the market has no book, which is to say is not trading, rather than a file of
 headers. A market that has not opened has no tokens to ask about, and says so.
 
+The exclusions are applied to each page as it arrives, so a page may add no rows. A
+market is tested by its event's title and by its own tags with its event's: one from the
+markets listing comes with an event that has no tags. `--event` fetches each event
+(`/events/{id}`) and takes the markets it embeds, each given the event and its tags, as
+a search does (`api.Filter.MarketsOf`); the status, floors and dates apply to them.
+
 `--search` does what `/` does in the browser. On `events` it is one more parameter of the
 listing, and everything else still applies. On `markets` and `outcomes` it goes through
 `/public-search` (`api.SearchMarkets`, paged by page number through the same
 `api.Pages`): the status and the tag go to the service, the floors and dates are applied
 to what comes back, and the order is the search's own, so `--order` with it is refused
 rather than quietly dropped.
+
+### Extending a file
+
+`--extend` (every dataset but `tags`, and only with `-o FILE`) merges what is fetched into
+an earlier export of the same dataset, so that a file can be brought up to date without
+fetching everything again (`export.Extend`). With no file there it writes one, so one
+command serves for the first run and the next.
+
+- The file is read before anything is fetched; its header must be the dataset's exactly.
+- A fetched row replaces the row of the file with the same key, where it was; one the
+  file does not hold is added; a row that was not fetched again stays. Rows compare as
+  written, after the formula guard, so a file is extended with the `--raw` it was made with.
+- The whole file is written again through the temporary file, so a failed or stopped
+  extension leaves it as it was. The summary reads `extended trades in f.csv: 12 new
+  rows, 3410 in all`.
+
+| Dataset | Key | Order of the file |
+|---|---|---|
+| `events`, `markets` | `id` | as it was, new rows at the end |
+| `outcomes` | `market_id, outcome_index` | as it was, new rows at the end |
+| `history` | `token_id, timestamp, resolution_seconds` | by market, outcome, then time |
+| `trades` | every column: one transaction may make several fills | newest first |
+| `book` | `token_id, timestamp, side, level` | snapshots oldest first |
+
+What is fetched is what the flags say, with one exception: `trades --extend` without
+`--since` starts at the newest trade the file holds, so it asks for a page or two; the
+trades of that second come again and are merged away. A history keeps points of every
+interval it was extended with, told apart by `resolution_seconds`: `max` is a point
+every 12 hours over the whole life, `1w` every 5 minutes over the last week only, so a
+file extended with `1w` at least weekly holds the fine history unbroken.
+
+### The Senate midterms dataset
+
+`scripts/senate-dump.sh [DIR]` makes it, into an empty directory
+(`data/senate-midterms` by default, which git ignores); `scripts/senate-extend.sh [DIR]`
+brings it up to date. Both run the same exports with `--extend`
+(`scripts/senate-common.sh`):
+
+1. `events` under `senate-midterms` (the races) and under `senate-elections` (control,
+   leadership, other Senate events) into one file, the merge making the union: open and
+   closed, ending on or after 2026-01-01, less primaries (the `primaries` and
+   `senate-primary` tags, or "primary" in the title: the tags miss some), "State
+   Senate" and "French Senate" in the title. 167 events on 2026-10-02.
+2. `markets` and `outcomes` of those events (`--event`, `--all`): 1,700 markets.
+3. For each market, `JOBS` at a time (default 2): `history --interval max` the first
+   time, `history --interval 1w`, `trades`, and `book` if it is open, each into
+   `by-market/<dataset>/<id>.csv`. An export that fails goes to `errors.log` and the
+   run goes on. A book is not asked of a closed market, and the "not trading" of an
+   open one is not a failure: an open market may not be taking orders (the "candidate
+   not listed above" of a race, 711 of them on the first run).
+4. `history.csv`, `trades.csv` and `book.csv` concatenated from those.
+5. `CLAUDE.md` copied from `scripts/senate-data.md`: what the files hold and how to read
+   them (keys, joins, the mixed widths of the history, the types DuckDB guesses wrongly).
+   It lives in the repository because the data directory is ignored and a dump starts
+   from an empty one.
+
+The first run, on 2026-10-02, took 46 minutes and wrote 3.6 million rows of history,
+154 thousand trades and 67 thousand levels of book: 2.7 GB on disk, half of it the
+per-market files the combined ones repeat. The history is most of it, nearly all the
+5-minute points of the last week, two outcomes to a market.
+
+`systemd/senate-extend.timer` runs the extension daily at 02:00 as a user unit
+(symlinked into `~/.config/systemd/user/`), `Persistent=` so that a run missed while the
+machine was off happens at boot: more than a week without one is a hole in the 5-minute
+history. The service builds the binary from the checkout first (`make build`), so the
+script and the binary are always of the same commit, and retries a failed run twice,
+half an hour apart.
+
+Two processes at 10 req/s each stay inside the tightest documented limit, 200 per 10 s
+on the price history, whatever endpoint both happen to be on.
 
 ### CSV format
 
@@ -694,9 +786,14 @@ so stray exports are not committed (`!testdata/**/*.csv`).
   the export dialog on every level, writing into a temporary directory the test has moved
   into: what each dataset holds, the requests "all there is" makes, the cap, the checks
   on the file, an export stopped by `esc` and by quitting leaving nothing behind.
+- `internal/export` also: `Extend` creating, upserting in place, keeping trades newest
+  first and a history in order, adding book snapshots, comparing guarded cells, refusing
+  another dataset's file before fetching, leaving the file on failure; `Newest`;
+  `TradePages` dropping after the end and asking no page past the start.
 - `internal/cli`: flag parsing to filter state; completion for dataset, `--order` and
   `--interval`; the export commands end to end against an `httptest` stand-in for the
-  three services.
+  three services, including `--extend` of trades from the file's newest, `--event` and
+  the exclusions.
 - `make smoke` (build tag `live`): one request per endpoint, asserting only shape, to catch
   API drift. Run by hand, not in CI.
 
@@ -710,6 +807,8 @@ so stray exports are not committed (`!testdata/**/*.csv`).
    in an event. Then the filter form, sub-tag picker and search.
 6. Market detail: outcomes, book, sparkline, trades; `export history|trades|book`.
 7. Export dialog with progress and cancel; README with a screenshot.
+8. `--extend`, `--event`, `--exclude-tag`/`--exclude-title`; the trades' bounds applied
+   by the client; the Senate midterms scripts.
 
 ## 11. Risks and open questions
 

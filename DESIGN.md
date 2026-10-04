@@ -651,7 +651,9 @@ brings it up to date. Both run the same exports with `--extend`
 
    The dialect is named as well: the sniffer misreads a doubled quote. Each file is
    written as `.parquet.tmp` and moved into place once all six are written, so a failed
-   build leaves the old ones. `scripts/senate-parquet.sh` runs the build alone.
+   build leaves the old ones. `scripts/senate-parquet.sh` runs the build alone. Time
+   runs forward in every file: within a market, the rows are oldest first. This
+   includes trades, which the export writes newest first.
 5. `CLAUDE.md` copied from `scripts/senate-data.md`: what the files hold and how to read
    them (keys, joins, order, the mixed widths of the history).
    It lives in the repository because the data directory is ignored and a dump starts

@@ -41,7 +41,7 @@ timestamps in UTC.
 | `markets.parquet` | market, with its first two outcomes | `id` | as first fetched, new at the end |
 | `outcomes.parquet` | market × outcome | `market_id, outcome_index` | as first fetched |
 | `history.parquet` | outcome × moment × bucket width | `token_id, timestamp, resolution_seconds` | `market_id` (as text), `outcome_index`, `timestamp`, `resolution_seconds` |
-| `trades.parquet` | fill | the whole row | `condition_id`, then newest first |
+| `trades.parquet` | fill | the whole row | `condition_id`, `timestamp` (oldest first) |
 | `book.parquet` | snapshot × outcome × side × price level | `token_id, timestamp, side, level` | `market_id` (as text), `timestamp`, `outcome_index`, bids before asks, `level` |
 | `errors.log` | export that failed on the last run | | |
 | `csv/` | the working store the runs extend | | |

@@ -11,6 +11,9 @@
 -- indexes. An empty cell is NULL. The dialect is named too, as that of Go's
 -- encoding/csv: the sniffer takes a quote doubled inside a cell for the end
 -- of an unterminated one.
+--
+-- Time always runs forward: within a market (and outcome), rows are oldest
+-- first, whatever order the CSVs hold them in (the trades' are newest first).
 
 SET TimeZone = 'UTC';
 
@@ -70,7 +73,9 @@ COPY (
 		'outcome_index': 'BIGINT', 'outcome': 'VARCHAR', 'token_id': 'VARCHAR',
 		'price': 'DOUBLE', 'size': 'DOUBLE', 'proxy_wallet': 'VARCHAR',
 		'name': 'VARCHAR', 'pseudonym': 'VARCHAR', 'transaction_hash': 'VARCHAR'})
-	ORDER BY condition_id, timestamp DESC
+	-- the fills of one moment by transaction, for an order that is the same
+	-- from one build to the next
+	ORDER BY condition_id, timestamp, transaction_hash, outcome_index, side, price, size
 ) TO 'trades.parquet.tmp' (FORMAT parquet, COMPRESSION zstd);
 
 COPY (

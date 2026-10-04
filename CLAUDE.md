@@ -48,14 +48,14 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - The iterators that fetch a market's history and book (`export.HistoryPages`, `export.BookPages`) are shared by `cli` and `ui`: change them there, not in either.
 - `polymarket export` with `-o -` (the default) writes only data: nothing goes to stderr, since a pipe reader such as grid is drawing on that terminal.
 - Export columns are a contract: never rename or reorder one; add at the end and update the goldens.
+- A path ending in `.parquet` is written as Parquet (`isParquet`); stdout and the TUI stay CSV. Only `internal/export/parquet.go` imports arrow, and a column's Parquet type comes from its `Kind`: an index or count is `Integer`, not `Number`.
+- Parquet goes through the same rows of cells as CSV, unguarded, and is read back as the cells a CSV would hold, so `merge` and `Newest` serve both. `pqarrow.FileWriter.Close` closes a sink that is an `io.Closer`: hand it a bare `io.Writer`, since `replace` closes the file.
 - `--extend` merges by a key per dataset in `merges` (`internal/export/extend.go`): a new extendable dataset needs an entry there, and `TestMergesNameColumnsOfTheirDatasets` checks its columns exist.
 - Flags of the output (`--limit`, `--extend`) are checked in `output.check`, which `filter()` and `query()` call before any request.
 - `--event`, `--exclude-tag` and `--exclude-title` are the list exports' only (`bindListFlags`), not the root command's filter flags; an exclusion tests a market by its event's title and by its own tags with its event's.
 - A market's trades go through `export.TradePages`, never `api.Pages` over `Client.Trades`: it applies the bounds the service ignores.
 - The Senate dataset is `scripts/senate-*.sh` into `data/senate-midterms/` (ignored), with `scripts/senate-data.md` copied in as its `CLAUDE.md`: change the description there. `shellcheck -x scripts/*.sh` must be clean.
-- The exports extend the CSVs under `data/senate-midterms/csv/`. Readers get the `*.parquet` files that `scripts/senate-parquet.sql` (DuckDB CLI) builds from them.
-  - A column there is typed by hand: an export column added to a dataset needs adding there too.
-  - `read_csv` needs `auto_detect = false` and the quote and escape named. The sniffer took a doubled `""` for an unterminated quote.
+- The exports extend Parquet files under `data/senate-midterms/store/`. Readers get the six `*.parquet` files that `scripts/senate-parquet.sql` (DuckDB CLI) combines and sorts from them; the types come from the exports.
 - `systemd/senate-extend.{service,timer}` are symlinked into `~/.config/systemd/user/`: after editing, `systemctl --user daemon-reload`. A run takes ~35 min.
 
 ## Testing
@@ -71,7 +71,8 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - `settle` in the UI tests runs commands until none is left, so a command that re-arms itself (a tick, a blink) hangs the test.
 - `fakeClient.Events` narrows its pages by `TagID` and `TitleSearch` as the service would; the other listings are handed out as they are.
 - The CLI `service`'s trades are all at 1790947065 (2026-10-02T13:17:45Z): a `--since`/`--until` test must bracket that, or the rows are dropped.
-- To check the real data, query its Parquet files with `duckdb` (installed system-wide). To read one of its CSVs, use DuckDB, not `awk -F,`, since questions hold commas. Name `outcome` and `token_id` VARCHAR, or it guesses BOOLEAN and DOUBLE.
+- To check the real data, query its Parquet files with `duckdb` (installed system-wide). To read a CSV export, use DuckDB, not `awk -F,`, since questions hold commas. Name `outcome` and `token_id` VARCHAR, or it guesses BOOLEAN and DOUBLE.
+- Extend tests run over `formats` (`.csv`, `.parquet`), and `readBack` reads either. Under `set -o pipefail`, `| head` exits 141.
 - `fakeClient` answers a token not in `books` with a 404, which is a market not trading; `history` is keyed `"<token> <interval>"`.
 - `market()` names its slug, condition ID and tokens after its ID (`slug-m2`, `0xm2`, `m2-yes`) and quotes it a cent either side of its price.
 - `bob(t)` (`internal/ui/detail_test.go`) opens the detail of `nominee`'s busiest market; pick a pane's line with `find(t, m, text)`, since the panes move with the height.

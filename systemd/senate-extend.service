@@ -19,6 +19,7 @@ WorkingDirectory=%h/workspace/polymarket
 # drift apart; the build is a no-op when nothing has changed.
 ExecStartPre=/usr/bin/make build
 Environment=POLYMARKET=%h/workspace/polymarket/polymarket
+# The Parquet files are built with duckdb from /usr/bin (pacman -S duckdb).
 # The dataset is data/senate-midterms under the checkout, which git ignores.
 # The script refuses to run until senate-dump.sh has made it.
 ExecStart=%h/workspace/polymarket/scripts/senate-extend.sh
@@ -28,6 +29,7 @@ Nice=10
 IOSchedulingClass=idle
 # Only an export of the events, markets or outcomes failing fails the run (a
 # market's own failures go to errors.log): no network yet, a 5xx from Gamma.
-# Three attempts, half an hour apart. A failed run leaves every file as it was.
+# Three attempts, half an hour apart. A failed run leaves the Parquet files as
+# they were.
 Restart=on-failure
 RestartSec=30min

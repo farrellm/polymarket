@@ -3,11 +3,12 @@
 # dataset into DIR (default: data/senate-midterms), which must be empty or
 # absent. senate-extend.sh brings it up to date afterwards.
 #
-# DIR ends up holding events.csv, markets.csv and outcomes.csv; history.csv,
-# trades.csv and book.csv, combined from by-market/<dataset>/<id>.csv; and
-# errors.log, the exports that failed; and CLAUDE.md, which describes it all
-# (copied from senate-data.md). See senate-common.sh for what is
-# selected, and for POLYMARKET and JOBS.
+# DIR ends up holding events, markets, outcomes, history, trades and book,
+# each a .parquet built from the CSVs under csv/ (events.csv, markets.csv,
+# outcomes.csv and by-market/<dataset>/<id>.csv), which are what the runs
+# extend; errors.log, the exports that failed; and CLAUDE.md, which describes
+# it all (copied from senate-data.md). See senate-common.sh for what is
+# selected, and for POLYMARKET, DUCKDB and JOBS.
 
 # shellcheck source=scripts/senate-common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/senate-common.sh"

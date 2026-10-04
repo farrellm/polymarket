@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Shared by senate-dump.sh and senate-extend.sh; not run on its own.
+# Shared by senate-dump.sh, senate-extend.sh and senate-parquet.sh; not run
+# on its own.
 #
 # The dataset is the 2026 US Senate midterms on Polymarket: the events
 # filed under the senate-midterms tag (the races) and the senate-elections
@@ -8,14 +9,15 @@
 # for state legislatures and the French Senate. The markets are those of
 # the events chosen.
 #
-# Every export is made with --extend, which creates a file that is not
-# there and merges into one that is: the dump and the extension differ
-# only in what they expect to find.
+# Every export is made with --extend into a CSV under csv/, which creates a
+# file that is not there and merges into one that is: the dump and the
+# extension differ only in what they expect to find. The CSVs are the working
+# store; what is read is the Parquet files built from them at the end of a run
+# (senate-parquet.sql).
 #
 # Environment:
 #   POLYMARKET  the binary (default: polymarket on the PATH)
-#
-# A market listed as open that has no book is not counted as a failure.
+#   DUCKDB      the DuckDB CLI (default: duckdb on the PATH)
 #   JOBS        markets fetched at once (default: 2). Each process keeps to
 #               10 requests a second, and the tightest documented limit is
 #               200 per 10 s (the price history), so 2 stays inside it.
@@ -24,9 +26,12 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PM=${POLYMARKET:-polymarket}
+DUCKDB=${DUCKDB:-duckdb}
 JOBS=${JOBS:-2}
 OUT=${1:-data/senate-midterms}
-export PM OUT
+CSV=$OUT/csv
+DATASETS=(events markets outcomes history trades book)
+export PM OUT CSV
 
 TAGS=(senate-midterms senate-elections)
 SELECT=(
@@ -48,7 +53,7 @@ ids() { tail -n +2 "$1" | grep -oE '^[0-9]+,' | tr -d , || true; }
 fetch() {
 	local id=$1 dataset=$2
 	shift 2
-	local file=$OUT/by-market/$dataset/$id.csv err
+	local file=$CSV/by-market/$dataset/$id.csv err
 	if ! err=$("$PM" export "$dataset" --market "$id" --extend -o "$file" "$@" 2>&1 >/dev/null); then
 		err=$(tr -s ' \n' ' ' <<<"$err")
 		# A market listed as open may not be taking orders yet (a "candidate
@@ -63,7 +68,7 @@ fetch() {
 # every time, so a run at least weekly keeps the fine history unbroken.
 market() {
 	local id=$1 open=$2
-	[[ -f $OUT/by-market/history/$id.csv ]] || fetch "$id" history --interval max
+	[[ -f $CSV/by-market/history/$id.csv ]] || fetch "$id" history --interval max
 	fetch "$id" history --interval 1w
 	fetch "$id" trades
 	if [[ $open == open ]]; then
@@ -72,42 +77,54 @@ market() {
 }
 export -f fetch market
 
-# combine rebuilds a dataset's file from the files of its markets: the
-# header once, then the rows of each.
-combine() {
-	local dataset=$1 files
-	files=("$OUT"/by-market/"$dataset"/*.csv)
-	[[ -e ${files[0]} ]] || return 0
-	{
-		head -n 1 "${files[0]}"
-		for f in "${files[@]}"; do tail -n +2 "$f"; done
-	} >"$OUT/$dataset.csv.tmp"
-	mv "$OUT/$dataset.csv.tmp" "$OUT/$dataset.csv"
+# parquet rebuilds the Parquet file of every dataset from the CSVs, each
+# written beside its old one and moved into place only once all are written,
+# so a failure leaves the old files.
+parquet() {
+	local scratch ok=0
+	# Where DuckDB spills the sort of the history: on the dataset's disk, as
+	# /tmp may be memory.
+	scratch=$(mktemp -d "$OUT/.duckdb.XXXXXX")
+	(cd "$OUT" && "$DUCKDB" -bail -cmd "SET temp_directory = '$(basename "$scratch")'" -f "$HERE/senate-parquet.sql") || ok=$?
+	rm -rf "$scratch"
+	if ((ok != 0)); then
+		rm -f "$OUT"/*.parquet.tmp
+		return "$ok"
+	fi
+	for dataset in "${DATASETS[@]}"; do mv "$OUT/$dataset.parquet.tmp" "$OUT/$dataset.parquet"; done
+}
+
+# rows says how many rows each Parquet file holds.
+rows() {
+	for dataset in "${DATASETS[@]}"; do
+		say "$(printf '%-16s %9d rows' "$dataset.parquet" \
+			"$("$DUCKDB" -noheader -list -c "SELECT count(*) FROM '$OUT/$dataset.parquet'")")"
+	done
 }
 
 run_all() {
 	local started=$SECONDS
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
-	mkdir -p "$OUT"/by-market/{history,trades,book}
+	mkdir -p "$CSV"/by-market/{history,trades,book}
 	: >"$OUT/errors.log"
 	# What the data is, for whoever (or whatever) reads it next.
 	cp "$HERE/senate-data.md" "$OUT/CLAUDE.md"
 
 	for tag in "${TAGS[@]}"; do
 		say "events under $tag"
-		"$PM" export events --tag "$tag" "${SELECT[@]}" --extend -o "$OUT/events.csv"
+		"$PM" export events --tag "$tag" "${SELECT[@]}" --extend -o "$CSV/events.csv"
 	done
 
 	local events=()
-	while read -r id; do events+=(--event "$id"); done < <(ids "$OUT/events.csv")
+	while read -r id; do events+=(--event "$id"); done < <(ids "$CSV/events.csv")
 	say "markets of $((${#events[@]} / 2)) events"
-	"$PM" export markets "${events[@]}" --all --extend -o "$OUT/markets.csv"
-	"$PM" export outcomes "${events[@]}" --all --extend -o "$OUT/outcomes.csv"
+	"$PM" export markets "${events[@]}" --all --extend -o "$CSV/markets.csv"
+	"$PM" export outcomes "${events[@]}" --all --extend -o "$CSV/outcomes.csv"
 	"$PM" export markets "${events[@]}" -o "$tmp/open.csv" >/dev/null 2>&1
 
 	ids "$tmp/open.csv" | LC_ALL=C sort >"$tmp/open"
-	ids "$OUT/markets.csv" | LC_ALL=C sort >"$tmp/all"
+	ids "$CSV/markets.csv" | LC_ALL=C sort >"$tmp/all"
 	local total
 	total=$(wc -l <"$tmp/all")
 	say "history, trades and book of $total markets, $JOBS at a time"
@@ -117,13 +134,11 @@ run_all() {
 		LC_ALL=C join -v 1 "$tmp/all" "$tmp/open" | sed 's/$/ closed/'
 	} | xargs -P "$JOBS" -L 1 bash -c 'market "$0" "$1"'
 
-	say "combining the markets' files"
-	for dataset in history trades book; do combine "$dataset"; done
+	say "building the Parquet files"
+	parquet
 
 	local failed
 	failed=$(wc -l <"$OUT/errors.log")
-	for f in events markets outcomes history trades book; do
-		[[ -f $OUT/$f.csv ]] && say "$(printf '%-9s %8d lines' "$f.csv" "$(wc -l <"$OUT/$f.csv")")"
-	done
+	rows
 	say "done in $(((SECONDS - started) / 60))m $(((SECONDS - started) % 60))s; $failed exports failed (see $OUT/errors.log)"
 }

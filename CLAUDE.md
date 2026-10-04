@@ -53,6 +53,9 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - `--event`, `--exclude-tag` and `--exclude-title` are the list exports' only (`bindListFlags`), not the root command's filter flags; an exclusion tests a market by its event's title and by its own tags with its event's.
 - A market's trades go through `export.TradePages`, never `api.Pages` over `Client.Trades`: it applies the bounds the service ignores.
 - The Senate dataset is `scripts/senate-*.sh` into `data/senate-midterms/` (ignored), with `scripts/senate-data.md` copied in as its `CLAUDE.md`: change the description there. `shellcheck -x scripts/*.sh` must be clean.
+- The exports extend the CSVs under `data/senate-midterms/csv/`. Readers get the `*.parquet` files that `scripts/senate-parquet.sql` (DuckDB CLI) builds from them.
+  - A column there is typed by hand: an export column added to a dataset needs adding there too.
+  - `read_csv` needs `auto_detect = false` and the quote and escape named. The sniffer took a doubled `""` for an unterminated quote.
 - `systemd/senate-extend.{service,timer}` are symlinked into `~/.config/systemd/user/`: after editing, `systemctl --user daemon-reload`. A run takes ~35 min.
 
 ## Testing
@@ -68,7 +71,7 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - `settle` in the UI tests runs commands until none is left, so a command that re-arms itself (a tick, a blink) hangs the test.
 - `fakeClient.Events` narrows its pages by `TagID` and `TitleSearch` as the service would; the other listings are handed out as they are.
 - The CLI `service`'s trades are all at 1790947065 (2026-10-02T13:17:45Z): a `--since`/`--until` test must bracket that, or the rows are dropped.
-- To check a CSV of the real data, use DuckDB (`pip install duckdb` in a scratch venv), not `awk -F,`: questions hold commas. Name `outcome` and `token_id` VARCHAR, or it guesses BOOLEAN and DOUBLE.
+- To check the real data, query its Parquet files with `duckdb` (installed system-wide). To read one of its CSVs, use DuckDB, not `awk -F,`, since questions hold commas. Name `outcome` and `token_id` VARCHAR, or it guesses BOOLEAN and DOUBLE.
 - `fakeClient` answers a token not in `books` with a 404, which is a market not trading; `history` is keyed `"<token> <interval>"`.
 - `market()` names its slug, condition ID and tokens after its ID (`slug-m2`, `0xm2`, `m2-yes`) and quotes it a cent either side of its price.
 - `bob(t)` (`internal/ui/detail_test.go`) opens the detail of `nominee`'s busiest market; pick a pane's line with `find(t, m, text)`, since the panes move with the height.

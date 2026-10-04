@@ -208,8 +208,11 @@ scripts/senate-extend.sh          # bring it up to date
 The events of the 2026 US Senate races, control of the Senate and its
 leaders (less primaries, state legislatures and the French Senate), their
 markets and outcomes, and every market's price history, trades and order
-book. `POLYMARKET` names the binary and `JOBS` how many markets are fetched at
-once (2, which keeps within Polymarket's rate limits).
+book. Each is a Parquet file built from the CSVs the runs extend (under `csv/`)
+with the DuckDB CLI, which must be installed (`pacman -S duckdb`).
+`scripts/senate-parquet.sh` rebuilds them without fetching anything.
+`POLYMARKET` names the binary, `DUCKDB` the DuckDB CLI, and `JOBS` how many
+markets are fetched at once (2, which keeps within Polymarket's rate limits).
 
 `systemd/` has a user timer that runs the extension daily at 02:00, with the
 binary built from the checkout first. The units are symlinked rather than

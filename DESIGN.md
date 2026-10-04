@@ -635,20 +635,35 @@ brings it up to date. Both run the same exports with `--extend`
 2. `markets` and `outcomes` of those events (`--event`, `--all`): 1,700 markets.
 3. For each market, `JOBS` at a time (default 2): `history --interval max` the first
    time, `history --interval 1w`, `trades`, and `book` if it is open, each into
-   `by-market/<dataset>/<id>.csv`. An export that fails goes to `errors.log` and the
+   `csv/by-market/<dataset>/<id>.csv`. An export that fails goes to `errors.log` and the
    run goes on. A book is not asked of a closed market, and the "not trading" of an
    open one is not a failure: an open market may not be taking orders (the "candidate
    not listed above" of a race, 711 of them on the first run).
-4. `history.csv`, `trades.csv` and `book.csv` concatenated from those.
+4. The CSVs (events, markets and outcomes under `csv/`, and the per-market files under
+   `csv/by-market/`) are the working store the exports extend. From them,
+   `scripts/senate-parquet.sql` builds one Parquet file per dataset in DIR, using the
+   DuckDB CLI (`DUCKDB`). The columns are typed by their kind in `internal/export`:
+   - Text, IDs included, is VARCHAR. DuckDB's guesses are wrong: `outcome` as BOOLEAN,
+     `token_id` as DOUBLE.
+   - Number is DOUBLE, but BIGINT for indexes and counts.
+   - Bool is BOOLEAN, and Time is TIMESTAMPTZ.
+   - An empty cell is NULL.
+
+   The dialect is named as well: the sniffer misreads a doubled quote. Each file is
+   written as `.parquet.tmp` and moved into place once all six are written, so a failed
+   build leaves the old ones. `scripts/senate-parquet.sh` runs the build alone.
 5. `CLAUDE.md` copied from `scripts/senate-data.md`: what the files hold and how to read
-   them (keys, joins, the mixed widths of the history, the types DuckDB guesses wrongly).
+   them (keys, joins, order, the mixed widths of the history).
    It lives in the repository because the data directory is ignored and a dump starts
    from an empty one.
 
 The first run, on 2026-10-02, took 46 minutes and wrote 3.6 million rows of history,
 154 thousand trades and 67 thousand levels of book: 2.7 GB on disk, half of it the
 per-market files the combined ones repeat. The history is most of it, nearly all the
-5-minute points of the last week, two outcomes to a market.
+5-minute points of the last week, two outcomes to a market. On 2026-10-04, the combined
+CSVs were replaced by Parquet built from the files already held. History's 4.2M rows
+went from 1.5 GB of CSV to 3 MB, and all six Parquet files come to 13 MB. The build
+takes 6 s. The CSV working store is 1.7 GB.
 
 `systemd/senate-extend.timer` runs the extension daily at 02:00 as a user unit
 (symlinked into `~/.config/systemd/user/`), `Persistent=` so that a run missed while the

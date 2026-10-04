@@ -9,10 +9,11 @@
 # for state legislatures and the French Senate. The markets are those of
 # the events chosen.
 #
-# Every export is made with --extend into a CSV under csv/, which creates a
-# file that is not there and merges into one that is: the dump and the
-# extension differ only in what they expect to find. The CSVs are the working
-# store; what is read is the Parquet files built from them at the end of a run
+# Every export is made with --extend into a Parquet file under store/, which
+# creates a file that is not there and merges into one that is: the dump and
+# the extension differ only in what they expect to find. The store is the
+# working copy, a file per market for history, trades and book; what is read
+# is the six Parquet files combined from it at the end of a run
 # (senate-parquet.sql).
 #
 # Environment:
@@ -29,9 +30,9 @@ PM=${POLYMARKET:-polymarket}
 DUCKDB=${DUCKDB:-duckdb}
 JOBS=${JOBS:-2}
 OUT=${1:-data/senate-midterms}
-CSV=$OUT/csv
+STORE=$OUT/store
 DATASETS=(events markets outcomes history trades book)
-export PM OUT CSV
+export PM OUT STORE
 
 TAGS=(senate-midterms senate-elections)
 SELECT=(
@@ -43,9 +44,8 @@ SELECT=(
 
 say() { printf '%s\n' "$*" >&2; }
 
-# ids lists the IDs in the first column of an export, which are digits and
-# never quoted, so a line of a quoted cell that runs over is not taken for one.
-ids() { tail -n +2 "$1" | grep -oE '^[0-9]+,' | tr -d , || true; }
+# ids lists the IDs of the markets or events in a Parquet export.
+ids() { "$DUCKDB" -noheader -list -c "SELECT id FROM '$1'"; }
 
 # fetch runs one export of a market into its file under by-market/, and logs
 # the error of one that fails rather than stopping the run: a market that has
@@ -53,7 +53,7 @@ ids() { tail -n +2 "$1" | grep -oE '^[0-9]+,' | tr -d , || true; }
 fetch() {
 	local id=$1 dataset=$2
 	shift 2
-	local file=$CSV/by-market/$dataset/$id.csv err
+	local file=$STORE/by-market/$dataset/$id.parquet err
 	if ! err=$("$PM" export "$dataset" --market "$id" --extend -o "$file" "$@" 2>&1 >/dev/null); then
 		err=$(tr -s ' \n' ' ' <<<"$err")
 		# A market listed as open may not be taking orders yet (a "candidate
@@ -68,7 +68,7 @@ fetch() {
 # every time, so a run at least weekly keeps the fine history unbroken.
 market() {
 	local id=$1 open=$2
-	[[ -f $CSV/by-market/history/$id.csv ]] || fetch "$id" history --interval max
+	[[ -f $STORE/by-market/history/$id.parquet ]] || fetch "$id" history --interval max
 	fetch "$id" history --interval 1w
 	fetch "$id" trades
 	if [[ $open == open ]]; then
@@ -77,7 +77,7 @@ market() {
 }
 export -f fetch market
 
-# parquet rebuilds the Parquet file of every dataset from the CSVs, each
+# parquet rebuilds the Parquet file of every dataset from the store, each
 # written beside its old one and moved into place only once all are written,
 # so a failure leaves the old files.
 parquet() {
@@ -106,25 +106,25 @@ run_all() {
 	local started=$SECONDS
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
-	mkdir -p "$CSV"/by-market/{history,trades,book}
+	mkdir -p "$STORE"/by-market/{history,trades,book}
 	: >"$OUT/errors.log"
 	# What the data is, for whoever (or whatever) reads it next.
 	cp "$HERE/senate-data.md" "$OUT/CLAUDE.md"
 
 	for tag in "${TAGS[@]}"; do
 		say "events under $tag"
-		"$PM" export events --tag "$tag" "${SELECT[@]}" --extend -o "$CSV/events.csv"
+		"$PM" export events --tag "$tag" "${SELECT[@]}" --extend -o "$STORE/events.parquet"
 	done
 
 	local events=()
-	while read -r id; do events+=(--event "$id"); done < <(ids "$CSV/events.csv")
+	while read -r id; do events+=(--event "$id"); done < <(ids "$STORE/events.parquet")
 	say "markets of $((${#events[@]} / 2)) events"
-	"$PM" export markets "${events[@]}" --all --extend -o "$CSV/markets.csv"
-	"$PM" export outcomes "${events[@]}" --all --extend -o "$CSV/outcomes.csv"
-	"$PM" export markets "${events[@]}" -o "$tmp/open.csv" >/dev/null 2>&1
+	"$PM" export markets "${events[@]}" --all --extend -o "$STORE/markets.parquet"
+	"$PM" export outcomes "${events[@]}" --all --extend -o "$STORE/outcomes.parquet"
+	"$PM" export markets "${events[@]}" -o "$tmp/open.parquet" >/dev/null 2>&1
 
-	ids "$tmp/open.csv" | LC_ALL=C sort >"$tmp/open"
-	ids "$CSV/markets.csv" | LC_ALL=C sort >"$tmp/all"
+	ids "$tmp/open.parquet" | LC_ALL=C sort >"$tmp/open"
+	ids "$STORE/markets.parquet" | LC_ALL=C sort >"$tmp/all"
 	local total
 	total=$(wc -l <"$tmp/all")
 	say "history, trades and book of $total markets, $JOBS at a time"

@@ -74,6 +74,10 @@ func Extend(ctx context.Context, d Dataset, path string, o Options) (Summary, er
 		return sum, err
 	}
 
+	if isParquet(path) {
+		// Parquet is written raw, so it is compared raw.
+		o.Raw = true
+	}
 	var fetched [][]string
 	if err := each(ctx, d, o, &sum, func(row []string) error {
 		fetched = append(fetched, slices.Clone(row))
@@ -85,6 +89,9 @@ func Extend(ctx context.Context, d Dataset, path string, o Options) (Summary, er
 	sum.Added, sum.Total = added, len(merged)
 
 	err = replace(path, func(w io.Writer) error {
+		if isParquet(path) {
+			return writeParquet(w, d.Columns(), merged)
+		}
 		cw := csv.NewWriter(w)
 		if err := cw.Write(header(d.Columns())); err != nil {
 			return err
@@ -104,19 +111,35 @@ func Extend(ctx context.Context, d Dataset, path string, o Options) (Summary, er
 // readExport reads the rows of an export of d, checking that its columns are
 // the dataset's.
 func readExport(path string, d Dataset) ([][]string, error) {
-	f, err := os.Open(path)
+	head, rows, err := readFile(path)
 	if err != nil {
 		return nil, err
+	}
+	if !slices.Equal(head, header(d.Columns())) {
+		return nil, fmt.Errorf("%s is not an export of %s: its columns are not that dataset's", path, d.Name())
+	}
+	return rows, nil
+}
+
+// readFile reads an export, Parquet or CSV by its name, as its header and
+// rows of cells. An empty CSV file has no header.
+func readFile(path string) (head []string, rows [][]string, err error) {
+	if isParquet(path) {
+		return readParquet(path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer func() { _ = f.Close() }()
 	records, err := csv.NewReader(f).ReadAll()
 	if err != nil {
-		return nil, fmt.Errorf("%s does not read as CSV: %w", path, err)
+		return nil, nil, fmt.Errorf("%s does not read as CSV: %w", path, err)
 	}
-	if len(records) == 0 || !slices.Equal(records[0], header(d.Columns())) {
-		return nil, fmt.Errorf("%s is not an export of %s: its columns are not that dataset's", path, d.Name())
+	if len(records) == 0 {
+		return nil, nil, nil
 	}
-	return records[1:], nil
+	return records[0], records[1:], nil
 }
 
 // merge puts the fetched rows into the old ones, as Extend describes, and
@@ -183,7 +206,7 @@ func indexes(columns []Column, names []string) []int {
 // compareCells orders two cells of a column: numbers by value, an empty one
 // first, and anything else as text, which is right for RFC 3339 times in UTC.
 func compareCells(kind Kind, a, b string) int {
-	if kind == Number {
+	if kind == Number || kind == Integer {
 		x, xerr := strconv.ParseFloat(a, 64)
 		y, yerr := strconv.ParseFloat(b, 64)
 		if xerr == nil && yerr == nil {
@@ -193,41 +216,26 @@ func compareCells(kind Kind, a, b string) int {
 	return strings.Compare(a, b)
 }
 
-// Newest is the latest time in the named column of the CSV file at path, or
-// the zero time if there is no such file or the column has no times in it.
+// Newest is the latest time in the named column of the export at path,
+// Parquet or CSV by its name, or the zero time if there is no such file or
+// the column has no times in it.
 func Newest(path, column string) (time.Time, error) {
-	f, err := os.Open(path)
+	head, rows, err := readFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return time.Time{}, nil
 	}
-	if err != nil {
+	if err != nil || head == nil {
 		return time.Time{}, err
-	}
-	defer func() { _ = f.Close() }()
-
-	r := csv.NewReader(f)
-	head, err := r.Read()
-	if errors.Is(err, io.EOF) {
-		return time.Time{}, nil
-	}
-	if err != nil {
-		return time.Time{}, fmt.Errorf("%s does not read as CSV: %w", path, err)
 	}
 	i := slices.Index(head, column)
 	if i < 0 {
 		return time.Time{}, fmt.Errorf("%s has no %s column", path, column)
 	}
 	var newest time.Time
-	for {
-		rec, err := r.Read()
-		if errors.Is(err, io.EOF) {
-			return newest, nil
-		}
-		if err != nil {
-			return time.Time{}, fmt.Errorf("%s does not read as CSV: %w", path, err)
-		}
-		if t, err := time.Parse(time.RFC3339, rec[i]); err == nil && t.After(newest) {
+	for _, row := range rows {
+		if t, err := time.Parse(time.RFC3339, row[i]); err == nil && t.After(newest) {
 			newest = t
 		}
 	}
+	return newest, nil
 }

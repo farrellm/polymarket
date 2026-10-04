@@ -1,7 +1,7 @@
-// Package export writes Polymarket data as CSV.
+// Package export writes Polymarket data as CSV or Parquet.
 //
 // A Dataset is a named table with a fixed set of columns; Run and File write
-// one out. Nothing here knows about the terminal, so the browser and the
+// one out, File as Parquet when the path ends in .parquet. Nothing here knows about the terminal, so the browser and the
 // headless `polymarket export` command share it.
 package export
 
@@ -16,8 +16,8 @@ import (
 )
 
 // Kind says what a column holds, which decides whether its cells may be
-// altered on the way out: only Text is ever guarded against a spreadsheet
-// reading it as a formula.
+// altered on the way out (only Text is ever guarded against a spreadsheet
+// reading it as a formula) and its type in Parquet.
 type Kind int
 
 // The kinds of column.
@@ -28,6 +28,8 @@ const (
 	// the same value. A negative one starts with a minus sign, so it must
 	// never be mistaken for text.
 	Number
+	// Integer is a whole number: an index or a count.
+	Integer
 	// Bool is true or false.
 	Bool
 	// Time is an RFC 3339 timestamp in UTC.
@@ -224,7 +226,7 @@ var outcomeColumns = []Column{
 	{"active", Bool},
 	{"closed", Bool},
 	{"end_date", Time},
-	{"outcome_index", Number},
+	{"outcome_index", Integer},
 	{"outcome", Text},
 	{"price", Number},
 	{"token_id", Text},
@@ -273,14 +275,14 @@ var eventColumns = []Column{
 	{"neg_risk", Bool},
 	{"start_date", Time},
 	{"end_date", Time},
-	{"markets", Number},
+	{"markets", Integer},
 	{"volume", Number},
 	{"volume_24h", Number},
 	{"volume_1w", Number},
 	{"volume_1m", Number},
 	{"liquidity", Number},
 	{"open_interest", Number},
-	{"comment_count", Number},
+	{"comment_count", Integer},
 	{"tags", Text},
 	{"url", Text},
 }
@@ -334,7 +336,7 @@ var tagColumns = []Column{
 	{"id", Text},
 	{"slug", Text},
 	{"label", Text},
-	{"events", Number},
+	{"events", Integer},
 	{"volume_24h", Number},
 	{"liquidity", Number},
 }
@@ -370,7 +372,7 @@ var ofOutcomeColumns = []Column{
 	{"market_slug", Text},
 	{"question", Text},
 	{"condition_id", Text},
-	{"outcome_index", Number},
+	{"outcome_index", Integer},
 	{"outcome", Text},
 	{"token_id", Text},
 }
@@ -397,7 +399,7 @@ type Series struct {
 var historyColumns = append(slices.Clone(ofOutcomeColumns),
 	Column{"timestamp", Time},
 	Column{"price", Number},
-	Column{"resolution_seconds", Number},
+	Column{"resolution_seconds", Integer},
 )
 
 // History is the history dataset: one row per outcome and moment, each
@@ -432,7 +434,7 @@ var tradeColumns = []Column{
 	{"event_slug", Text},
 	{"question", Text},
 	{"side", Text},
-	{"outcome_index", Number},
+	{"outcome_index", Integer},
 	{"outcome", Text},
 	{"token_id", Text},
 	{"price", Number},
@@ -487,7 +489,7 @@ type Depth struct {
 var bookColumns = append(slices.Clone(ofOutcomeColumns),
 	Column{"timestamp", Time},
 	Column{"side", Text},
-	Column{"level", Number},
+	Column{"level", Integer},
 	Column{"price", Number},
 	Column{"size", Number},
 )

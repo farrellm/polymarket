@@ -2,7 +2,6 @@ package export
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"os"
 	"path/filepath"
@@ -55,23 +54,18 @@ func extend(t *testing.T, d Dataset, path string) ([][]string, Summary) {
 	return readBack(t, path), sum
 }
 
+// readBack reads an export back, Parquet or CSV by its name, header first.
 func readBack(t *testing.T, path string) [][]string {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	head, rows, err := readFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return readCSV(t, string(b))
+	return append([][]string{head}, rows...)
 }
 
-func readCSV(t *testing.T, text string) [][]string {
-	t.Helper()
-	records, err := csv.NewReader(strings.NewReader(text)).ReadAll()
-	if err != nil {
-		t.Fatalf("not CSV: %v", err)
-	}
-	return records
-}
+// formats are the extensions of the formats a file can be extended in.
+var formats = []string{".csv", ".parquet"}
 
 func TestMergesNameColumnsOfTheirDatasets(t *testing.T) {
 	for name, spec := range merges {
@@ -98,102 +92,122 @@ func TestMergesNameColumnsOfTheirDatasets(t *testing.T) {
 }
 
 func TestExtendCreatesAMissingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.csv")
-	records, sum := extend(t, rowsOf("events", map[string]string{"id": "1"}), path)
-	wantCells(t, records, "id", "1")
-	if sum.Added != 1 || sum.Total != 1 || sum.Rows != 1 {
-		t.Errorf("summary %+v, want 1 row added, 1 in all", sum)
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "events"+ext)
+			records, sum := extend(t, rowsOf("events", map[string]string{"id": "1"}), path)
+			wantCells(t, records, "id", "1")
+			if sum.Added != 1 || sum.Total != 1 || sum.Rows != 1 {
+				t.Errorf("summary %+v, want 1 row added, 1 in all", sum)
+			}
+			wantFiles(t, filepath.Dir(path), "events"+ext)
+		})
 	}
-	wantFiles(t, filepath.Dir(path), "events.csv")
 }
 
 func TestExtendUpsertsByKey(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "markets.csv")
-	extend(t, rowsOf("markets",
-		map[string]string{"id": "1", "question": "One?", "volume": "10"},
-		map[string]string{"id": "2", "question": "Two?", "volume": "20"},
-	), path)
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "markets"+ext)
+			extend(t, rowsOf("markets",
+				map[string]string{"id": "1", "question": "One?", "volume": "10"},
+				map[string]string{"id": "2", "question": "Two?", "volume": "20"},
+			), path)
 
-	// The second is fetched again with a new figure, a third is new, and the
-	// first is no longer listed (closed, say) and stays as it was.
-	records, sum := extend(t, rowsOf("markets",
-		map[string]string{"id": "3", "question": "Three?", "volume": "30"},
-		map[string]string{"id": "2", "question": "Two?", "volume": "25"},
-	), path)
-	wantCells(t, records, "id", "1", "2", "3")
-	wantCells(t, records, "volume", "10", "25", "30")
-	if sum.Rows != 2 || sum.Added != 1 || sum.Total != 3 {
-		t.Errorf("summary %+v, want 2 fetched, 1 added, 3 in all", sum)
+			// The second is fetched again with a new figure, a third is new, and the
+			// first is no longer listed (closed, say) and stays as it was.
+			records, sum := extend(t, rowsOf("markets",
+				map[string]string{"id": "3", "question": "Three?", "volume": "30"},
+				map[string]string{"id": "2", "question": "Two?", "volume": "25"},
+			), path)
+			wantCells(t, records, "id", "1", "2", "3")
+			wantCells(t, records, "volume", "10", "25", "30")
+			if sum.Rows != 2 || sum.Added != 1 || sum.Total != 3 {
+				t.Errorf("summary %+v, want 2 fetched, 1 added, 3 in all", sum)
+			}
+		})
 	}
 }
 
 func TestExtendTradesKeepsThemNewestFirst(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "trades.csv")
-	fill := func(ts, hash, size string) map[string]string {
-		return map[string]string{"timestamp": ts, "transaction_hash": hash, "size": size}
-	}
-	extend(t, rowsOf("trades",
-		fill("2026-10-02T12:00:00Z", "0xb", "5"),
-		fill("2026-10-02T12:00:00Z", "0xb", "6"),
-		fill("2026-10-01T12:00:00Z", "0xa", "1"),
-	), path)
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "trades"+ext)
+			fill := func(ts, hash, size string) map[string]string {
+				return map[string]string{"timestamp": ts, "transaction_hash": hash, "size": size}
+			}
+			extend(t, rowsOf("trades",
+				fill("2026-10-02T12:00:00Z", "0xb", "5"),
+				fill("2026-10-02T12:00:00Z", "0xb", "6"),
+				fill("2026-10-01T12:00:00Z", "0xa", "1"),
+			), path)
 
-	// What was fetched overlaps the newest second of the file: two fills of
-	// one transaction, the same two as before, and nothing else from then.
-	records, sum := extend(t, rowsOf("trades",
-		fill("2026-10-03T08:00:00Z", "0xd", "9"),
-		fill("2026-10-02T18:00:00Z", "0xc", "7"),
-		fill("2026-10-02T12:00:00Z", "0xb", "5"),
-		fill("2026-10-02T12:00:00Z", "0xb", "6"),
-	), path)
-	wantCells(t, records, "transaction_hash", "0xd", "0xc", "0xb", "0xb", "0xa")
-	wantCells(t, records, "size", "9", "7", "5", "6", "1")
-	if sum.Added != 2 || sum.Total != 5 {
-		t.Errorf("summary %+v, want 2 added, 5 in all", sum)
+			// What was fetched overlaps the newest second of the file: two fills of
+			// one transaction, the same two as before, and nothing else from then.
+			records, sum := extend(t, rowsOf("trades",
+				fill("2026-10-03T08:00:00Z", "0xd", "9"),
+				fill("2026-10-02T18:00:00Z", "0xc", "7"),
+				fill("2026-10-02T12:00:00Z", "0xb", "5"),
+				fill("2026-10-02T12:00:00Z", "0xb", "6"),
+			), path)
+			wantCells(t, records, "transaction_hash", "0xd", "0xc", "0xb", "0xb", "0xa")
+			wantCells(t, records, "size", "9", "7", "5", "6", "1")
+			if sum.Added != 2 || sum.Total != 5 {
+				t.Errorf("summary %+v, want 2 added, 5 in all", sum)
+			}
+		})
 	}
 }
 
 func TestExtendHistoryKeepsEachOutcomeOldestFirst(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "history.csv")
-	point := func(outcome, ts, res string) map[string]string {
-		return map[string]string{"market_id": "7", "outcome_index": outcome, "token_id": "t" + outcome,
-			"timestamp": ts, "resolution_seconds": res, "price": "0.5"}
-	}
-	extend(t, rowsOf("history",
-		point("0", "2026-09-01T00:00:00Z", "43200"),
-		point("0", "2026-10-01T00:00:00Z", "0"),
-		point("1", "2026-09-01T00:00:00Z", "43200"),
-		point("10", "2026-09-01T00:00:00Z", "43200"),
-	), path)
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "history"+ext)
+			point := func(outcome, ts, res string) map[string]string {
+				return map[string]string{"market_id": "7", "outcome_index": outcome, "token_id": "t" + outcome,
+					"timestamp": ts, "resolution_seconds": res, "price": "0.5"}
+			}
+			extend(t, rowsOf("history",
+				point("0", "2026-09-01T00:00:00Z", "43200"),
+				point("0", "2026-10-01T00:00:00Z", "0"),
+				point("1", "2026-09-01T00:00:00Z", "43200"),
+				point("10", "2026-09-01T00:00:00Z", "43200"),
+			), path)
 
-	// A finer interval later: a point at a moment the file has, but of
-	// another width, is another point.
-	records, sum := extend(t, rowsOf("history",
-		point("0", "2026-09-01T00:00:00Z", "300"),
-		point("0", "2026-10-02T00:00:00Z", "300"),
-		point("1", "2026-10-02T00:00:00Z", "300"),
-	), path)
-	wantCells(t, records, "outcome_index", "0", "0", "0", "0", "1", "1", "10")
-	wantCells(t, records, "timestamp",
-		"2026-09-01T00:00:00Z", "2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z",
-		"2026-09-01T00:00:00Z", "2026-10-02T00:00:00Z", "2026-09-01T00:00:00Z")
-	// The sort is stable: the old point of a moment stays before the new.
-	wantCells(t, records, "resolution_seconds", "43200", "300", "0", "300", "43200", "300", "43200")
-	if sum.Added != 3 {
-		t.Errorf("summary %+v, want 3 added", sum)
+			// A finer interval later: a point at a moment the file has, but of
+			// another width, is another point.
+			records, sum := extend(t, rowsOf("history",
+				point("0", "2026-09-01T00:00:00Z", "300"),
+				point("0", "2026-10-02T00:00:00Z", "300"),
+				point("1", "2026-10-02T00:00:00Z", "300"),
+			), path)
+			wantCells(t, records, "outcome_index", "0", "0", "0", "0", "1", "1", "10")
+			wantCells(t, records, "timestamp",
+				"2026-09-01T00:00:00Z", "2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z",
+				"2026-09-01T00:00:00Z", "2026-10-02T00:00:00Z", "2026-09-01T00:00:00Z")
+			// The sort is stable: the old point of a moment stays before the new.
+			wantCells(t, records, "resolution_seconds", "43200", "300", "0", "300", "43200", "300", "43200")
+			if sum.Added != 3 {
+				t.Errorf("summary %+v, want 3 added", sum)
+			}
+		})
 	}
 }
 
 func TestExtendBookAddsASnapshot(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "book.csv")
-	level := func(ts, side, n string) map[string]string {
-		return map[string]string{"token_id": "t", "timestamp": ts, "side": side, "level": n}
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "book"+ext)
+			level := func(ts, side, n string) map[string]string {
+				return map[string]string{"token_id": "t", "timestamp": ts, "side": side, "level": n}
+			}
+			extend(t, rowsOf("book", level("2026-10-01T00:00:00Z", "bid", "1"), level("2026-10-01T00:00:00Z", "ask", "1")), path)
+			records, _ := extend(t, rowsOf("book", level("2026-10-02T00:00:00Z", "bid", "1"), level("2026-10-02T00:00:00Z", "ask", "1")), path)
+			wantCells(t, records, "timestamp",
+				"2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z", "2026-10-02T00:00:00Z")
+			wantCells(t, records, "side", "bid", "ask", "bid", "ask")
+		})
 	}
-	extend(t, rowsOf("book", level("2026-10-01T00:00:00Z", "bid", "1"), level("2026-10-01T00:00:00Z", "ask", "1")), path)
-	records, _ := extend(t, rowsOf("book", level("2026-10-02T00:00:00Z", "bid", "1"), level("2026-10-02T00:00:00Z", "ask", "1")), path)
-	wantCells(t, records, "timestamp",
-		"2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", "2026-10-02T00:00:00Z", "2026-10-02T00:00:00Z")
-	wantCells(t, records, "side", "bid", "ask", "bid", "ask")
 }
 
 func TestExtendComparesGuardedCells(t *testing.T) {
@@ -248,57 +262,65 @@ func numberedAs(name string, fetched *int) Dataset {
 }
 
 func TestExtendLeavesTheFileOnFailure(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "events.csv")
-	extend(t, rowsOf("events", map[string]string{"id": "1"}), path)
-	want, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	broken := rowsOf("events", map[string]string{"id": "2"}).(*table)
-	rows := broken.rows
-	broken.rows = func(yield func([]string, error) bool) {
-		for row := range rows {
-			if !yield(row, nil) {
-				return
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "events"+ext)
+			extend(t, rowsOf("events", map[string]string{"id": "1"}), path)
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		yield(nil, errors.New("boom"))
+
+			broken := rowsOf("events", map[string]string{"id": "2"}).(*table)
+			rows := broken.rows
+			broken.rows = func(yield func([]string, error) bool) {
+				for row := range rows {
+					if !yield(row, nil) {
+						return
+					}
+				}
+				yield(nil, errors.New("boom"))
+			}
+			if _, err := Extend(context.Background(), broken, path, Options{}); err == nil {
+				t.Fatal("no error, want the extension to fail")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("the file now holds %q, want %q", got, want)
+			}
+			wantFiles(t, filepath.Dir(path), "events"+ext)
+		})
 	}
-	if _, err := Extend(context.Background(), broken, path, Options{}); err == nil {
-		t.Fatal("no error, want the extension to fail")
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != string(want) {
-		t.Errorf("the file now holds %q, want %q", got, want)
-	}
-	wantFiles(t, filepath.Dir(path), "events.csv")
 }
 
 func TestNewest(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "trades.csv")
-	if got, err := Newest(path, "timestamp"); err != nil || !got.IsZero() {
-		t.Errorf("a missing file: %v, %v, want the zero time", got, err)
-	}
-	extend(t, rowsOf("trades",
-		map[string]string{"timestamp": "2026-10-01T00:00:00Z"},
-		map[string]string{"timestamp": "2026-10-03T00:00:00Z"},
-		map[string]string{"timestamp": ""},
-		map[string]string{"timestamp": "2026-10-02T00:00:00Z"},
-	), path)
-	got, err := Newest(path, "timestamp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
-		t.Errorf("newest = %v, want %v", got, want)
-	}
-	if _, err := Newest(path, "when"); err == nil {
-		t.Error("no error for a column the file does not have")
+	for _, ext := range formats {
+		t.Run(ext, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "trades"+ext)
+			if got, err := Newest(path, "timestamp"); err != nil || !got.IsZero() {
+				t.Errorf("a missing file: %v, %v, want the zero time", got, err)
+			}
+			extend(t, rowsOf("trades",
+				map[string]string{"timestamp": "2026-10-01T00:00:00Z"},
+				map[string]string{"timestamp": "2026-10-03T00:00:00Z"},
+				map[string]string{"timestamp": ""},
+				map[string]string{"timestamp": "2026-10-02T00:00:00Z"},
+			), path)
+			got, err := Newest(path, "timestamp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
+				t.Errorf("newest = %v, want %v", got, want)
+			}
+			if _, err := Newest(path, "when"); err == nil {
+				t.Error("no error for a column the file does not have")
+			}
+		})
 	}
 }
 

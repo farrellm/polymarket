@@ -109,15 +109,20 @@ func guard(cell string) string {
 	return cell
 }
 
-// File writes the dataset to path, replacing any file already there. The
+// File writes the dataset to path, replacing any file already there: as
+// Parquet if path ends in .parquet (RunParquet), and as CSV otherwise. The
 // rows go to path.tmp alongside it and are renamed into place only once all
 // of them are written, so an export that fails or is cancelled leaves
 // neither a partial file nor a damaged earlier one.
 func File(ctx context.Context, d Dataset, path string, o Options) (sum Summary, err error) {
 	sum = Summary{Dataset: d.Name()}
+	run := Run
+	if isParquet(path) {
+		run = RunParquet
+	}
 	err = replace(path, func(w io.Writer) error {
 		var runErr error
-		sum, runErr = Run(ctx, d, w, o)
+		sum, runErr = run(ctx, d, w, o)
 		return runErr
 	})
 	return sum, err

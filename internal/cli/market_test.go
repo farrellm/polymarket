@@ -147,27 +147,34 @@ func TestExportTradesBounds(t *testing.T) {
 }
 
 func TestExtendTrades(t *testing.T) {
-	s := newService(t)
-	path := filepath.Join(t.TempDir(), "trades.csv")
-	if _, _, err := s.run(t, "export", "trades", "--market", "first", "-o", path); err != nil {
-		t.Fatal(err)
-	}
-	_, stderr, err := s.run(t, "export", "trades", "--market", "first", "--extend", "-o", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "extended trades in " + path + ": 0 new rows, 3 in all"; !strings.Contains(stderr, want) {
-		t.Errorf("stderr = %q, want it to say %q", stderr, want)
-	}
-	asked := s.asked("/data/trades")
-	// The newest trade the file holds is where the extension starts.
-	wantParams(t, asked[len(asked)-2], map[string]string{"start": "1790947065", "cursor": ""})
+	for _, ext := range []string{".csv", ".parquet"} {
+		t.Run(ext, func(t *testing.T) {
+			s := newService(t)
+			path := filepath.Join(t.TempDir(), "trades"+ext)
+			if _, _, err := s.run(t, "export", "trades", "--market", "first", "-o", path); err != nil {
+				t.Fatal(err)
+			}
+			_, stderr, err := s.run(t, "export", "trades", "--market", "first", "--extend", "-o", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "extended trades in " + path + ": 0 new rows, 3 in all"; !strings.Contains(stderr, want) {
+				t.Errorf("stderr = %q, want it to say %q", stderr, want)
+			}
+			asked := s.asked("/data/trades")
+			// The newest trade the file holds is where the extension starts.
+			wantParams(t, asked[len(asked)-2], map[string]string{"start": "1790947065", "cursor": ""})
 
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+			if ext == ".parquet" {
+				return
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCells(t, readCSV(t, string(b)), "transaction_hash", "0xa", "0xb", "0xc")
+		})
 	}
-	wantCells(t, readCSV(t, string(b)), "transaction_hash", "0xa", "0xb", "0xc")
 }
 
 func TestExportBook(t *testing.T) {

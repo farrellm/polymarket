@@ -343,13 +343,15 @@ var listDatasets = []listDataset{
 func newExportCommand(o *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export",
-		Short: "export a dataset to CSV without opening the browser",
-		Long: "export writes one dataset as CSV, to standard output unless -o names a file.\n\n" +
-			"The file has a header row, RFC 3339 timestamps in UTC, prices as\n" +
+		Short: "export a dataset to CSV or Parquet without opening the browser",
+		Long: "export writes one dataset as CSV, to standard output unless -o names a file.\n" +
+			"A file named *.parquet is written as Parquet instead, its columns typed.\n\n" +
+			"A CSV file has a header row, RFC 3339 timestamps in UTC, prices as\n" +
 			"decimals between 0 and 1, and an empty cell wherever Polymarket has\n" +
 			"no value. A file is written under a temporary name and renamed once\n" +
 			"complete, so an interrupted export leaves nothing behind.",
 		Example: "polymarket export markets --tag politics --min-volume 10000 --limit 5000 -o politics.csv\n" +
+			"polymarket export outcomes --tag politics -o outcomes.parquet\n" +
 			"polymarket export events --order endDate | grid\n" +
 			"polymarket export history --market will-anna-win --interval 1w | grid",
 		Args: cobra.NoArgs,
@@ -457,8 +459,8 @@ type output struct {
 func (out *output) bind(cmd *cobra.Command) {
 	f := cmd.Flags()
 	f.IntVar(&out.limit, "limit", 0, "write at most this many rows (default: all of them)")
-	f.StringVarP(&out.path, "output", "o", "-", "write to this file; - is standard output")
-	f.BoolVar(&out.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets")
+	f.StringVarP(&out.path, "output", "o", "-", "write to this file, as Parquet if it ends in .parquet; - is standard output")
+	f.BoolVar(&out.raw, "raw", false, "do not guard text starting with = + - @ against spreadsheets (Parquet never is)")
 	f.BoolVar(&out.extend, "extend", false,
 		"merge into the file -o names, an earlier export of the same dataset, rather than replace it")
 }

@@ -4,15 +4,15 @@
 # refreshed and new ones added; a new market gets the whole of its history,
 # a known one its last week; trades are fetched from the newest one held;
 # and every open market's book adds a snapshot. Nothing already held is lost.
-# The CSVs under DIR/csv are extended, and the Parquet files rebuilt from them.
+# The store under DIR/store is extended, and the Parquet files rebuilt from it.
 #
 # Run it at least weekly to keep the five-minute history unbroken.
 
 # shellcheck source=scripts/senate-common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/senate-common.sh"
 
-if [[ ! -f $CSV/markets.csv ]]; then
-	say "$CSV holds no dump: run senate-dump.sh first"
+if [[ ! -f $STORE/markets.parquet ]]; then
+	say "$STORE holds no dump: run senate-dump.sh first"
 	exit 1
 fi
 run_all

@@ -10,8 +10,8 @@ systemd user timer (`senate-extend.timer`) runs `scripts/senate-extend.sh` daily
 02:00 to bring it up to date. `DESIGN.md` §6 in that repository covers how it is made.
 
 The data is **read-only output**: do not edit the files by hand. The next run merges into
-the CSVs under `csv/` by key, and would keep a hand edit or overwrite it unpredictably.
-It then rebuilds the Parquet files from them, which overwrites any edit to one.
+the files under `store/` by key, and would keep a hand edit or overwrite it
+unpredictably. It then rebuilds the Parquet files from them, which overwrites any edit to one.
 
 ## What is selected
 
@@ -44,14 +44,14 @@ timestamps in UTC.
 | `trades.parquet` | fill | the whole row | `condition_id`, `timestamp` (oldest first) |
 | `book.parquet` | snapshot × outcome × side × price level | `token_id, timestamp, side, level` | `market_id` (as text), `timestamp`, `outcome_index`, bids before asks, `level` |
 | `errors.log` | export that failed on the last run | | |
-| `csv/` | the working store the runs extend | | |
+| `store/` | the working store the runs extend | | |
 
-`csv/` holds `events.csv`, `markets.csv` and `outcomes.csv`, and
-`by-market/<dataset>/<market id>.csv` for history, trades and book. The exports
-merge into these files. At the end of every run, `scripts/senate-parquet.sql` rebuilds
-all six Parquet files from them. The two hold the same rows; only the Parquet files
-have their types. `scripts/senate-parquet.sh` rebuilds the Parquet files without
-fetching anything.
+`store/` holds `events.parquet`, `markets.parquet` and `outcomes.parquet`, and
+`by-market/<dataset>/<market id>.parquet` for history, trades and book, with the same
+columns and types as the files above. The exports merge into these files. At the end of
+every run, `scripts/senate-parquet.sql` puts them together and sorts them into the six
+files above. The two hold the same rows; read the six, which are sorted and whole.
+`scripts/senate-parquet.sh` rebuilds them without fetching anything.
 
 Joins: `markets.event_id = events.id`; `outcomes.market_id`, `history.market_id` and
 `book.market_id` = `markets.id`; `trades.condition_id = markets.condition_id`;
@@ -64,18 +64,18 @@ Joins: `markets.event_id = events.id`; `outcomes.market_id`, `history.market_id`
   to about 1. `price_1`/`price_2` in `markets` are the outcomes' prices as Polymarket
   shows them at fetch time; `best_bid`, `best_ask`, `last_trade_price`, `spread` and `change_*` are those of
   the **first** outcome only.
-- **NULL = Polymarket sent no value**, never zero (an empty cell in the CSVs). A market
+- **NULL = Polymarket sent no value**, never zero. A market
   that never traded has no volume; 283 markets have no `end_date` of their own (their
   event has one).
 - **Closed** markets keep the last quotes they had, which are stale. Use `closed` before
   trusting `best_bid`/`best_ask`.
-- **Timestamps** are `TIMESTAMP WITH TIME ZONE`, stored in UTC (RFC 3339 text in the
-  CSVs, `2026-11-04T00:00:00Z`).
+- **Timestamps** are `TIMESTAMP WITH TIME ZONE`, stored in UTC.
 - **IDs are text.** This includes `token_id`, a 77-digit number that any numeric type
   would lose precision on. `condition_id` is hex. Market IDs sort as text.
 - `tags` is `|`-joined tag slugs. `url` is the page on polymarket.com.
-- Text starting with `= + - @` would carry a leading `'` (a spreadsheet guard). None did
-  on 2026-10-02.
+- Text is as Polymarket sent it: no spreadsheet guard. Until 2026-10-04 the CSV store
+  put a `'` before text starting with `= + - @`; 37 trader names had one, and lost it
+  when the store became Parquet.
 - The figures in `events`/`markets` (volume, liquidity, prices) are **as of the
   last run**: each run overwrites them. They are not a time series; `history` is.
 
@@ -113,7 +113,7 @@ so about 840 of the 1,700 markets have one.
 ## Querying
 
 Use DuckDB or polars. On 2026-10-04, history was 4.2M rows in 3 MB of Parquet (1.5 GB
-as CSV), most of them 5-minute points. The types are in the files, so a view needs no
+as CSV), most of them 5-minute points; the whole store was 44 MB. The types are in the files, so a view needs no
 more than the file:
 
 ```sql
@@ -147,5 +147,5 @@ cat errors.log                                     # what the last run could not
 ```
 
 A run takes 35–45 minutes at `JOBS=2`, the most that stays inside Polymarket's rate
-limits. A failed run leaves the Parquet files as they were. The CSVs keep whatever the run
-merged into them before it failed, and the next run's build picks that up.
+limits. A failed run leaves the Parquet files as they were. The store keeps whatever the run
+merged into it before it failed, and the next run's build picks that up.

@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) and 8 (`--extend`, `--event`, `--exclude-tag`/`--exclude-title`, the trades bounded client-side, and the Senate midterms scripts) implemented: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02. The trades' `start` and `end` were found ignored, and the documented rate limits read, on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) and 8 (`--extend`, `--event`, `--exclude-tag`/`--exclude-title`, the trades bounded client-side, and the Senate midterms scripts) and 9 (Parquet files, `-o x.parquet`, and the Senate dataset's store in Parquet) implemented: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02. The trades' `start` and `end` were found ignored, and the documented rate limits read, on 2026-10-02.
 
 ## 1. Summary
 
@@ -30,6 +30,7 @@ Same baseline as grid (`go 1.26.6` in go.mod; fang + cobra entry point; Bubble T
 | `charm.land/log/v2` | v2.0.1 | `--debug` log file (never the screen) |
 | `github.com/charmbracelet/fang` + `spf13/cobra` | v1.0.0 / v1.10.2 | CLI, help, completion, `--version` |
 | `golang.org/x/time/rate` | latest | client-side rate limiter |
+| `github.com/apache/arrow-go/v18` | v18.7.0 | Parquet files (`export/parquet.go` alone) |
 
 No Polymarket SDK: the read endpoints are plain JSON over HTTPS and a hand-written client
 of a few hundred lines is easier to test and keeps trading/signing code out of the binary.
@@ -85,6 +86,7 @@ internal/export/            datasets -> CSV (no UI imports)
                             browser alike
     csv.go                  writer: temp file + atomic rename, or stdout
     extend.go               merging an export into an earlier file of it
+    parquet.go              Parquet: the schema from the kinds, writing and reading back
 internal/format/            money ($1.2M), price (66.5¢), deltas (+3.5¢), relative dates (2y)
 internal/ui/                Bubble Tea models
     model.go                root model: screen stack, size, frame, breadcrumb, status bar, routing
@@ -592,12 +594,14 @@ rather than quietly dropped.
 
 ### Extending a file
 
-`--extend` (every dataset but `tags`, and only with `-o FILE`) merges what is fetched into
-an earlier export of the same dataset, so that a file can be brought up to date without
+`--extend` (every dataset but `tags`, and only with `-o FILE`, CSV or Parquet) merges
+what is fetched into an earlier export of the same dataset, so that a file can be brought up to date without
 fetching everything again (`export.Extend`). With no file there it writes one, so one
 command serves for the first run and the next.
 
-- The file is read before anything is fetched; its header must be the dataset's exactly.
+- The file is read before anything is fetched; its header (a Parquet file's field names)
+  must be the dataset's exactly. A Parquet file is read back as the cells a CSV export
+  would hold, unguarded, so the merge is the same for both.
 - A fetched row replaces the row of the file with the same key, where it was; one the
   file does not hold is added; a row that was not fetched again stays. Rows compare as
   written, after the formula guard, so a file is extended with the `--raw` it was made with.
@@ -635,21 +639,15 @@ brings it up to date. Both run the same exports with `--extend`
 2. `markets` and `outcomes` of those events (`--event`, `--all`): 1,700 markets.
 3. For each market, `JOBS` at a time (default 2): `history --interval max` the first
    time, `history --interval 1w`, `trades`, and `book` if it is open, each into
-   `csv/by-market/<dataset>/<id>.csv`. An export that fails goes to `errors.log` and the
+   `store/by-market/<dataset>/<id>.parquet`. An export that fails goes to `errors.log` and the
    run goes on. A book is not asked of a closed market, and the "not trading" of an
    open one is not a failure: an open market may not be taking orders (the "candidate
    not listed above" of a race, 711 of them on the first run).
-4. The CSVs (events, markets and outcomes under `csv/`, and the per-market files under
-   `csv/by-market/`) are the working store the exports extend. From them,
+4. The Parquet files under `store/` (events, markets and outcomes, and the per-market
+   files under `store/by-market/`) are the working store the exports extend. From them,
    `scripts/senate-parquet.sql` builds one Parquet file per dataset in DIR, using the
-   DuckDB CLI (`DUCKDB`). The columns are typed by their kind in `internal/export`:
-   - Text, IDs included, is VARCHAR. DuckDB's guesses are wrong: `outcome` as BOOLEAN,
-     `token_id` as DOUBLE.
-   - Number is DOUBLE, but BIGINT for indexes and counts.
-   - Bool is BOOLEAN, and Time is TIMESTAMPTZ.
-   - An empty cell is NULL.
-
-   The dialect is named as well: the sniffer misreads a doubled quote. Each file is
+   DuckDB CLI (`DUCKDB`). The exports have typed the columns already, so the build only
+   puts the markets' files together and sorts them. Each file is
    written as `.parquet.tmp` and moved into place once all six are written, so a failed
    build leaves the old ones. `scripts/senate-parquet.sh` runs the build alone. Time
    runs forward in every file: within a market, the rows are oldest first. This
@@ -665,7 +663,10 @@ per-market files the combined ones repeat. The history is most of it, nearly all
 5-minute points of the last week, two outcomes to a market. On 2026-10-04, the combined
 CSVs were replaced by Parquet built from the files already held. History's 4.2M rows
 went from 1.5 GB of CSV to 3 MB, and all six Parquet files come to 13 MB. The build
-takes 6 s. The CSV working store is 1.7 GB.
+takes 6 s. The CSV working store was 1.7 GB. Later that day the store itself became
+Parquet (milestone 9), converted once from the CSVs with DuckDB: 4,240 files in 25 s,
+44 MB. The rebuilt six held the same rows, but for 37 trades whose trader's name had
+carried the spreadsheet guard, which Parquet does not have.
 
 `systemd/senate-extend.timer` runs the extension daily at 02:00 as a user unit
 (symlinked into `~/.config/systemd/user/`), `Persistent=` so that a run missed while the
@@ -711,7 +712,8 @@ on the price history, whatever endpoint both happen to be on.
   token_id, timestamp, side, level, price, size`. `side` is `bid` or `ask`, an outcome's
   bids before its asks; `level` counts from 1 at the best price of a side; `timestamp` is
   the snapshot's.
-- Every column has a kind (text, number, bool, time). The client parses numbers on the
+- Every column has a kind (text, number, integer, bool, time); integer and number are
+  written alike in CSV and differ in Parquet. The client parses numbers on the
   way in (`api.Float`), so they are written back in their shortest round-tripping form
   rather than byte for byte.
 - Text cells beginning with `=`, `+`, `-` or `@` are prefixed with `'` so a spreadsheet
@@ -724,6 +726,23 @@ on the price history, whatever endpoint both happen to be on.
   its tags.
 - "All matching" has a safety cap (`--limit`, default 10 000 rows in the TUI, where it is
   a field of the dialog) because the open-market set is tens of thousands of rows.
+
+### Parquet format
+
+- Chosen by the file name: `-o` ending in `.parquet` (any case) writes Parquet, in the
+  CLI and in `export.File`/`export.Extend`. Standard output is always CSV, since what
+  reads a pipe (grid) reads CSV. The TUI's dialog writes CSV.
+- The same columns in the same order, typed by their kind in `dataset.go`:
+  Text `utf8`, Number `float64`, Integer `int64` (indexes and counts), Bool `bool`,
+  Time `timestamp[us, UTC]` (DuckDB's `TIMESTAMPTZ`). Every column is nullable, and a
+  missing value (an empty cell) is a null.
+- Text is never guarded: a typed file is not for a spreadsheet, and `--raw` changes
+  nothing.
+- zstd, a row group per 65,536 rows, written through `arrow-go`'s `pqarrow` from the same
+  rows of cells as the CSV, so a dataset knows nothing of the format. parquet-go was
+  passed over: its dynamic schema is a map, which sorts the fields by name.
+- Read back as the cells the CSV would hold, for `--extend` and `Newest`. Files DuckDB
+  wrote read too: any string or timestamp type, and 32-bit integers.
 
 ## 7. CLI
 
@@ -826,6 +845,8 @@ so stray exports are not committed (`!testdata/**/*.csv`).
 7. Export dialog with progress and cancel; README with a screenshot.
 8. `--extend`, `--event`, `--exclude-tag`/`--exclude-title`; the trades' bounds applied
    by the client; the Senate midterms scripts.
+9. Parquet files (`-o x.parquet`, `--extend` of one); the `Integer` kind; the Senate
+   dataset's store in Parquet, the build reduced to combining it.
 
 ## 11. Risks and open questions
 

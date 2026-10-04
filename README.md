@@ -1,6 +1,6 @@
 # polymarket
 
-*A terminal browser for Polymarket, with a CSV export.*
+*A terminal browser for Polymarket, with a CSV and Parquet export.*
 
 `polymarket` reads the public market data of [Polymarket](https://polymarket.com)
 and shows it in the terminal. It drills down from tags to events to markets to
@@ -160,11 +160,12 @@ polymarket export events --order endDate | grid
 polymarket export history --market <slug|id> --interval 1w
 polymarket export trades  --market <slug|id> --since 2026-09-01 -o trades.csv
 polymarket export book    --market <slug|id> --outcome yes
+polymarket export outcomes --tag politics -o outcomes.parquet
 ```
 
 The output is standard output unless `-o` names a file, so an export pipes
 straight into [grid](https://github.com/farrellm/grid), DuckDB or anything else
-that reads CSV.
+that reads CSV. A file named `*.parquet` is written as Parquet instead.
 
 | Dataset | One row per | Selected by |
 | --- | --- | --- |
@@ -191,7 +192,7 @@ ones added, and none lost. With no file there it simply writes one.
 
 ```
 polymarket export trades --market <slug|id> --extend -o trades.csv
-polymarket export markets --tag senate-midterms --all --extend -o markets.csv
+polymarket export markets --tag senate-midterms --all --extend -o markets.parquet
 ```
 
 `trades` then fetches only the trades since the newest one in the file. A
@@ -208,9 +209,10 @@ scripts/senate-extend.sh          # bring it up to date
 The events of the 2026 US Senate races, control of the Senate and its
 leaders (less primaries, state legislatures and the French Senate), their
 markets and outcomes, and every market's price history, trades and order
-book. Each is a Parquet file built from the CSVs the runs extend (under `csv/`)
-with the DuckDB CLI, which must be installed (`pacman -S duckdb`).
-`scripts/senate-parquet.sh` rebuilds them without fetching anything.
+book. The runs extend a Parquet file per market under `store/`, which the
+DuckDB CLI puts together into one file per dataset; it must be installed
+(`pacman -S duckdb`). `scripts/senate-parquet.sh` rebuilds those without
+fetching anything.
 `POLYMARKET` names the binary, `DUCKDB` the DuckDB CLI, and `JOBS` how many
 markets are fetched at once (2, which keeps within Polymarket's rate limits).
 
@@ -239,6 +241,9 @@ must linger (`loginctl enable-linger`) for it to run while you are logged out.
 - IDs and token IDs are text: a token ID has 77 digits.
 - Text starting with `=`, `+`, `-` or `@` is prefixed with `'` so that a
   spreadsheet does not evaluate it; `--raw` leaves it alone.
+- A Parquet file (`-o x.parquet`) holds the same columns, typed: text, doubles,
+  64-bit integers for indexes and counts, booleans, and timestamps in UTC. A
+  missing value is a null, and text is never guarded.
 
 ## Development
 

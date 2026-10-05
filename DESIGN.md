@@ -685,7 +685,11 @@ carried the spreadsheet guard, which Parquet does not have.
 The House's first dump, on 2026-10-04, fetched about 40 markets a minute at `JOBS=2`,
 so about 3½ hours for 8,858; it was killed at 5,350 (the machine short of memory) and
 finished by `house-extend.sh`, which takes up a dump where it stopped: a market with no
-history file gets the whole of it.
+history file gets the whole of it. Its build was then killed too: sorting 21.6M rows of
+history took DuckDB 8 GB. `midterms-parquet.sql` sets `memory_limit` to 2 GB, so the
+sort spills to the dataset's disk, and the build takes 41 s. The six files hold 21.6M rows
+of history, 372 thousand trades and 618 thousand levels of book in 41 MB; the store is
+200 MB.
 
 `systemd/midterms-extend.timer` runs both extensions daily at 02:00 as a user unit
 (symlinked into `~/.config/systemd/user/`), `Persistent=` so that a run missed while the

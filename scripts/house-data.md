@@ -99,8 +99,8 @@ One row per fill. A transaction can make several fills, so `transaction_hash` is
 unique. `side` is the taker's (`BUY`/`SELL`) of the outcome `outcome`/`outcome_index`,
 `size` is in shares, `price` is 0–1, and `size * price` is the USDC paid. A market's
 trades of every outcome are mixed together. `proxy_wallet` is the trader; `name` and
-`pseudonym` are their public profile, often NULL. Trades grow sharply toward the
-election.
+`pseudonym` are their public profile, often NULL. Trades run from 2025-07 and grow
+sharply toward the election (132K in 2026-09).
 
 ### book
 
@@ -108,12 +108,12 @@ Each run adds one snapshot of the book of every **open** market that is taking o
 `timestamp` is the snapshot's. Within one, an outcome's bids come before its asks, and
 `level` is 1 at the best price. `size` is in shares. A closed market has no book, and
 neither does an open one not yet taking orders (e.g. "a candidate not listed above"):
-744 of the 8,802 open markets were not on 2026-10-04.
+744 of the 8,802 open markets were not on 2026-10-04, and 4,904 markets had a book.
 
 ## Querying
 
-Use DuckDB or polars. History is most of the rows, nearly all of them 5-minute points.
-The types are in the files, so a view needs no more than the file:
+Use DuckDB or polars. On 2026-10-05, history was 21.6M rows in 16 MB of Parquet, nearly
+all of them 5-minute points; the six files came to 41 MB and the whole store to 200 MB. The types are in the files, so a view needs no more than the file:
 
 ```sql
 SET TimeZone = 'UTC';  -- else date_trunc and the display use the local zone

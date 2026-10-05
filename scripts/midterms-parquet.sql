@@ -11,6 +11,11 @@
 -- first, whatever order the store holds them in (the trades' are newest first).
 
 SET TimeZone = 'UTC';
+-- The House's history (21.6M rows on 2026-10-05) took 8 GB to sort, and the
+-- OOM killer ended the run: kept to 2 GB, the sort spills to temp_directory,
+-- which parquet() puts on the dataset's disk.
+SET memory_limit = '2GB';
+SET preserve_insertion_order = false;
 
 COPY (FROM 'store/events.parquet') TO 'events.parquet.tmp' (FORMAT parquet, COMPRESSION zstd);
 

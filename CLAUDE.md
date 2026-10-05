@@ -54,9 +54,12 @@ A milestone is two commits: the work with its `DESIGN.md` changes, then `Record 
 - Flags of the output (`--limit`, `--extend`) are checked in `output.check`, which `filter()` and `query()` call before any request.
 - `--event`, `--exclude-tag` and `--exclude-title` are the list exports' only (`bindListFlags`), not the root command's filter flags; an exclusion tests a market by its event's title and by its own tags with its event's.
 - A market's trades go through `export.TradePages`, never `api.Pages` over `Client.Trades`: it applies the bounds the service ignores.
-- The Senate dataset is `scripts/senate-*.sh` into `data/senate-midterms/` (ignored), with `scripts/senate-data.md` copied in as its `CLAUDE.md`: change the description there. `shellcheck -x scripts/*.sh` must be clean.
-- The exports extend Parquet files under `data/senate-midterms/store/`. Readers get the six `*.parquet` files that `scripts/senate-parquet.sql` (DuckDB CLI) combines and sorts from them; the types come from the exports.
-- `systemd/senate-extend.{service,timer}` are symlinked into `~/.config/systemd/user/`: after editing, `systemctl --user daemon-reload`. A run takes ~35 min.
+- The midterms datasets are `scripts/{senate,house}-*.sh` into `data/{senate,house}-midterms/` (ignored): thin scripts that set `CHAMBER` and source `scripts/midterms-common.sh`, where the chambers differ only in `select_events`. Each copies its `scripts/<chamber>-data.md` in as `CLAUDE.md`: change the description there. `shellcheck -x scripts/*.sh` must be clean.
+- The exports extend Parquet files under `data/<chamber>-midterms/store/`. Readers get the six `*.parquet` files that `scripts/midterms-parquet.sql` (DuckDB CLI) combines and sorts from them; the types come from the exports.
+- A run holds `DIR/.lock` (`flock`): a second run on the same dataset waits. A dump that dies is finished by `<chamber>-extend.sh`, since a market without a history file gets the whole of it.
+- No tag holds the House's control as `senate-elections` does the Senate's: the House takes `midterms` events with `--search House` beside `house-elections`.
+- `systemd/midterms-extend.{service,timer}` are symlinked into `~/.config/systemd/user/`: after editing, `systemctl --user daemon-reload`. The service runs the Senate (~40 min) and then the House (~3½ h, 8,858 markets), never both at once: two runs at JOBS=2 would break the price history's rate limit.
+- A long run started from a Claude Code background shell can be killed when memory runs short; start it with `systemd-run --user --unit=<name>` and follow it with `journalctl --user -u <name>`.
 
 ## Testing
 

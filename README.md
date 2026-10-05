@@ -199,36 +199,40 @@ polymarket export markets --tag senate-midterms --all --extend -o markets.parque
 history extended with `--interval 1w` at least weekly keeps the five-minute
 points the service only holds for a week.
 
-### The Senate midterms dataset
+### The midterms datasets
 
 ```
 scripts/senate-dump.sh            # the first dump, into data/senate-midterms
 scripts/senate-extend.sh          # bring it up to date
+scripts/house-dump.sh             # the same for the House, into data/house-midterms
+scripts/house-extend.sh
 ```
 
 The events of the 2026 US Senate races, control of the Senate and its
-leaders (less primaries, state legislatures and the French Senate), their
-markets and outcomes, and every market's price history, trades and order
-book. The runs extend a Parquet file per market under `store/`, which the
-DuckDB CLI puts together into one file per dataset; it must be installed
-(`pacman -S duckdb`). `scripts/senate-parquet.sh` rebuilds those without
-fetching anything.
+leaders (less primaries, state legislatures and the French Senate), and of
+the House races, control of the House and its Speaker (less primaries and
+state legislatures), with their markets and outcomes, and every market's
+price history, trades and order book. The runs extend a Parquet file per
+market under `store/`, which the DuckDB CLI puts together into one file per
+dataset; it must be installed (`pacman -S duckdb`).
+`scripts/{senate,house}-parquet.sh` rebuild those without fetching anything.
 `POLYMARKET` names the binary, `DUCKDB` the DuckDB CLI, and `JOBS` how many
 markets are fetched at once (2, which keeps within Polymarket's rate limits).
+Two runs on one directory wait for each other.
 
-`systemd/` has a user timer that runs the extension daily at 02:00, with the
-binary built from the checkout first. The units are symlinked rather than
-copied, so a `systemctl --user daemon-reload` after editing them is the whole
-deploy:
+`systemd/` has a user timer that runs both extensions daily at 02:00, one
+after the other, with the binary built from the checkout first. The units are
+symlinked rather than copied, so a `systemctl --user daemon-reload` after
+editing them is the whole deploy:
 
 ```
-ln -s "$PWD"/systemd/senate-extend.{service,timer} ~/.config/systemd/user/
+ln -s "$PWD"/systemd/midterms-extend.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now senate-extend.timer
-journalctl --user -u senate-extend    # how the last runs went
+systemctl --user enable --now midterms-extend.timer
+journalctl --user -u midterms-extend    # how the last runs went
 ```
 
-The dump has to have been made first, into `data/senate-midterms`. A run
+Both dumps have to have been made first. A run
 missed while the machine was off happens at the next boot; the user manager
 must linger (`loginctl enable-linger`) for it to run while you are logged out.
 

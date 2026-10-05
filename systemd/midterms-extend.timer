@@ -1,9 +1,9 @@
-# Tracked in the repo at systemd/senate-extend.timer, and installed into
-# ~/.config/systemd/user/ as a SYMLINK to it (see README, "The Senate midterms
-# dataset"), so editing it here and running `systemctl --user daemon-reload` is
+# Tracked in the repo at systemd/midterms-extend.timer, and installed into
+# ~/.config/systemd/user/ as a SYMLINK to it (see README, "The midterms
+# datasets"), so editing it here and running `systemctl --user daemon-reload` is
 # the whole deploy.
 [Unit]
-Description=Daily extension of the 2026 Senate midterms dataset
+Description=Daily extension of the 2026 Senate and House midterms datasets
 Documentation=file:///home/farrellm/workspace/polymarket/README.md
 
 [Timer]

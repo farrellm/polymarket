@@ -2,7 +2,7 @@
 
 A terminal UI for exploring Polymarket market data and exporting it to CSV.
 
-Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) and 8 (`--extend`, `--event`, `--exclude-tag`/`--exclude-title`, the trades bounded client-side, and the Senate midterms scripts) and 9 (Parquet files, `-o x.parquet`, and the Senate dataset's store in Parquet) implemented: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02. The trades' `start` and `end` were found ignored, and the documented rate limits read, on 2026-10-02.
+Status: milestones 1 (scaffold), 2 (`internal/api`), 3 (`internal/export`, `polymarket export markets|events|outcomes`), 4 (`internal/ui`: the screen stack, the breadcrumb and the Tags level), 5 (the Events and Markets lists of a tag, the markets of an event, sort, filter form, sub-tag picker, search, help; `--search` on the exports and the filter flags on the root command) and 6 (the market detail: outcomes, price chart, order book, trades and the About tab, with `o` and `y`; `polymarket export history|trades|book`) and 7 (the export dialog behind `e`, with its progress and `esc` to stop it; the README) and 8 (`--extend`, `--event`, `--exclude-tag`/`--exclude-title`, the trades bounded client-side, and the Senate midterms scripts) and 9 (Parquet files, `-o x.parquet`, and the Senate dataset's store in Parquet) implemented, with the House midterms dataset beside the Senate's since 2026-10-04: nothing is left as design only. Endpoint shapes in §4 were checked against the live API on 2026-10-01, and again while recording the fixtures and probing the sort orders, the event cursor, the tag lookup, the search, the market lookup, the book, the price history, the trades and the cost of `include_tag` on 2026-10-02. The trades' `start` and `end` were found ignored, and the documented rate limits read, on 2026-10-02.
 
 ## 1. Summary
 
@@ -102,9 +102,9 @@ internal/ui/                Bubble Tea models
     open.go                 handing a page to the system's browser
     exportdlg.go            the export dialog, and the export it sets running
 testdata/                   recorded API responses; golden/ holds the golden CSVs
-scripts/                    senate-dump.sh, senate-extend.sh and what they share:
-                            the 2026 Senate midterms dataset (§6)
-systemd/                    senate-extend.{service,timer}: the extension daily at 02:00
+scripts/                    {senate,house}-{dump,extend,parquet}.sh and what they
+                            share: the 2026 Senate and House midterms datasets (§6)
+systemd/                    midterms-extend.{service,timer}: the extensions daily at 02:00
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
 ```
 
@@ -235,6 +235,10 @@ of those.
   unknown `interval`, or none, is a 400.
 - A description may hold tabs and carriage returns, which would move the frame: they are
   taken out before it is shown.
+- The chambers are tagged unevenly (2026-10-04): the Senate's control and leaders are
+  under `senate-elections`, but the House's control, Speaker and seats by state carry
+  only `midterms`; `house-elections` holds the district races. The House dataset takes
+  the events under `midterms` whose title matches "House" (`--search House`).
 - Token IDs are 77-digit decimals: keep them as strings everywhere, including CSV.
 - Identifiers differ per service: Gamma `id`/`slug`, CLOB `token_id` (per outcome), Data
   API `condition` (= `conditionId`, per market).
@@ -624,38 +628,48 @@ interval it was extended with, told apart by `resolution_seconds`: `max` is a po
 every 12 hours over the whole life, `1w` every 5 minutes over the last week only, so a
 file extended with `1w` at least weekly holds the fine history unbroken.
 
-### The Senate midterms dataset
+### The midterms datasets
 
-`scripts/senate-dump.sh [DIR]` makes it, into an empty directory
+`scripts/senate-dump.sh [DIR]` makes the Senate's, into an empty directory
 (`data/senate-midterms` by default, which git ignores); `scripts/senate-extend.sh [DIR]`
-brings it up to date. Both run the same exports with `--extend`
-(`scripts/senate-common.sh`):
+brings it up to date. `scripts/house-{dump,extend}.sh` do the same for the House, into
+`data/house-midterms`. All four set `CHAMBER` and run the same exports with `--extend`
+(`scripts/midterms-common.sh`), which differ only in which events they select:
 
-1. `events` under `senate-midterms` (the races) and under `senate-elections` (control,
-   leadership, other Senate events) into one file, the merge making the union: open and
-   closed, ending on or after 2026-01-01, less primaries (the `primaries` and
-   `senate-primary` tags, or "primary" in the title: the tags miss some), "State
-   Senate" and "French Senate" in the title. 167 events on 2026-10-02.
-2. `markets` and `outcomes` of those events (`--event`, `--all`): 1,700 markets.
+1. `events` into one file, the merge making the union: open and closed, ending on or
+   after 2026-01-01, less primaries (the `primaries` tag and the chamber's own primary
+   tags, or "primary" in the title: the tags miss some).
+   - Senate: under `senate-midterms` (the races) and under `senate-elections` (control,
+     leadership, other Senate events), less "State Senate" and "French Senate" in the
+     title. 167 events on 2026-10-02.
+   - House: under `house-elections` (the district races) and under `midterms` with
+     `--search House` (control, the Speaker, seats by state: no tag holds them, §4), less
+     the `house-primary`/`house-primaries` tags and "State House" in the title. 909
+     events on 2026-10-04.
+2. `markets` and `outcomes` of those events (`--event`, `--all`): 1,700 markets for the
+   Senate, 8,858 for the House.
 3. For each market, `JOBS` at a time (default 2): `history --interval max` the first
    time, `history --interval 1w`, `trades`, and `book` if it is open, each into
    `store/by-market/<dataset>/<id>.parquet`. An export that fails goes to `errors.log` and the
    run goes on. A book is not asked of a closed market, and the "not trading" of an
    open one is not a failure: an open market may not be taking orders (the "candidate
-   not listed above" of a race, 711 of them on the first run).
+   not listed above" of a race, 711 of them on the Senate's first run).
 4. The Parquet files under `store/` (events, markets and outcomes, and the per-market
    files under `store/by-market/`) are the working store the exports extend. From them,
-   `scripts/senate-parquet.sql` builds one Parquet file per dataset in DIR, using the
+   `scripts/midterms-parquet.sql` builds one Parquet file per dataset in DIR, using the
    DuckDB CLI (`DUCKDB`). The exports have typed the columns already, so the build only
    puts the markets' files together and sorts them. Each file is
    written as `.parquet.tmp` and moved into place once all six are written, so a failed
-   build leaves the old ones. `scripts/senate-parquet.sh` runs the build alone. Time
+   build leaves the old ones. `scripts/{senate,house}-parquet.sh` run the build alone. Time
    runs forward in every file: within a market, the rows are oldest first. This
    includes trades, which the export writes newest first.
-5. `CLAUDE.md` copied from `scripts/senate-data.md`: what the files hold and how to read
-   them (keys, joins, order, the mixed widths of the history).
+5. `CLAUDE.md` copied from `scripts/{senate,house}-data.md`: what the files hold and how
+   to read them (keys, joins, order, the mixed widths of the history).
    It lives in the repository because the data directory is ignored and a dump starts
    from an empty one.
+
+A run and a build hold `DIR/.lock` (`flock`) while they work, so a second run on the
+same directory waits for the first: the timer's run may start while a dump is going.
 
 The first run, on 2026-10-02, took 46 minutes and wrote 3.6 million rows of history,
 154 thousand trades and 67 thousand levels of book: 2.7 GB on disk, half of it the
@@ -668,15 +682,23 @@ Parquet (milestone 9), converted once from the CSVs with DuckDB: 4,240 files in 
 44 MB. The rebuilt six held the same rows, but for 37 trades whose trader's name had
 carried the spreadsheet guard, which Parquet does not have.
 
-`systemd/senate-extend.timer` runs the extension daily at 02:00 as a user unit
+The House's first dump, on 2026-10-04, fetched about 40 markets a minute at `JOBS=2`,
+so about 3½ hours for 8,858; it was killed at 5,350 (the machine short of memory) and
+finished by `house-extend.sh`, which takes up a dump where it stopped: a market with no
+history file gets the whole of it.
+
+`systemd/midterms-extend.timer` runs both extensions daily at 02:00 as a user unit
 (symlinked into `~/.config/systemd/user/`), `Persistent=` so that a run missed while the
 machine was off happens at boot: more than a week without one is a hole in the 5-minute
 history. The service builds the binary from the checkout first (`make build`), so the
 script and the binary are always of the same commit, and retries a failed run twice,
-half an hour apart.
+half an hour apart. It runs `senate-extend.sh` and then `house-extend.sh` (two
+`ExecStart=`), never both at once; a failure of the first skips the second, and the retry
+runs both.
 
 Two processes at 10 req/s each stay inside the tightest documented limit, 200 per 10 s
-on the price history, whatever endpoint both happen to be on.
+on the price history, whatever endpoint both happen to be on. Two runs at once would be
+four, which is why the units run the chambers one after the other.
 
 ### CSV format
 

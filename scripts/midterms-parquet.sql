@@ -1,6 +1,6 @@
--- senate-parquet.sql - builds the Parquet files of the Senate midterms dataset
--- from the store that the exports extend under store/. Run by parquet() in
--- senate-common.sh with the dataset's directory as the working directory;
+-- midterms-parquet.sql - builds the Parquet files of a midterms dataset (Senate
+-- or House) from the store that the exports extend under store/. Run by parquet() in
+-- midterms-common.sh with the dataset's directory as the working directory;
 -- each file is written as <dataset>.parquet.tmp, which parquet() moves into
 -- place once all six are written.
 --

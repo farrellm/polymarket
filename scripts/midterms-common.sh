@@ -1,20 +1,28 @@
 # shellcheck shell=bash
-# Shared by senate-dump.sh, senate-extend.sh and senate-parquet.sh; not run
-# on its own.
+# Shared by the scripts of the two 2026 US midterms datasets, senate-*.sh and
+# house-*.sh; not run on its own. A script sets CHAMBER (senate or house),
+# sources this, and calls dump, extend or rebuild.
 #
-# The dataset is the 2026 US Senate midterms on Polymarket: the events
-# filed under the senate-midterms tag (the races) and the senate-elections
-# tag (control of the chamber, its leaders, and other Senate events), open
-# or closed, ending on or after 2026-01-01, less the primaries, the races
-# for state legislatures and the French Senate. The markets are those of
-# the events chosen.
+# A dataset is the events of one chamber's 2026 midterms on Polymarket, open
+# or closed, ending on or after 2026-01-01, less the primaries; the markets
+# are those of the events chosen. select_events, below, says which:
+#
+#   senate  the events filed under the senate-midterms tag (the races) and
+#           the senate-elections tag (control of the chamber, its leaders,
+#           and other Senate events), less the races for state legislatures
+#           and the French Senate.
+#   house   the events filed under the house-elections tag (the district
+#           races), and those under the midterms tag whose title matches
+#           "House" (control of the chamber, its seats by state, the
+#           Speaker), less the races for state legislatures. No tag holds
+#           the control of the House as senate-elections does the Senate's.
 #
 # Every export is made with --extend into a Parquet file under store/, which
 # creates a file that is not there and merges into one that is: the dump and
 # the extension differ only in what they expect to find. The store is the
 # working copy, a file per market for history, trades and book; what is read
 # is the six Parquet files combined from it at the end of a run
-# (senate-parquet.sql).
+# (midterms-parquet.sql).
 #
 # Environment:
 #   POLYMARKET  the binary (default: polymarket on the PATH)
@@ -29,18 +37,52 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PM=${POLYMARKET:-polymarket}
 DUCKDB=${DUCKDB:-duckdb}
 JOBS=${JOBS:-2}
-OUT=${1:-data/senate-midterms}
+case ${CHAMBER:-} in
+senate | house) ;;
+*)
+	printf 'CHAMBER must be senate or house, not "%s"\n' "${CHAMBER:-}" >&2
+	exit 2
+	;;
+esac
+OUT=${1:-data/$CHAMBER-midterms}
 STORE=$OUT/store
+# What the data is, for whoever (or whatever) reads it next: copied to
+# $OUT/CLAUDE.md on every run.
+DOC=$HERE/$CHAMBER-data.md
 DATASETS=(events markets outcomes history trades book)
 export PM OUT STORE
 
-TAGS=(senate-midterms senate-elections)
+# Every export of the events takes these: open and closed, of this year,
+# and no primaries (the tags miss some, so the title too).
 SELECT=(
 	--all --ends-after 2026-01-01
-	--exclude-tag primaries --exclude-tag senate-primary --exclude-title primary
-	--exclude-title "State Senate"
-	--exclude-title "French Senate"
+	--exclude-tag primaries --exclude-title primary
 )
+
+# select_events exports the events of the dataset into one file, the merge
+# making the union of the exports.
+select_events() {
+	local events=$STORE/events.parquet
+	case $CHAMBER in
+	senate)
+		local select=("${SELECT[@]}" --exclude-tag senate-primary
+			--exclude-title "State Senate" --exclude-title "French Senate")
+		local tag
+		for tag in senate-midterms senate-elections; do
+			say "events under $tag"
+			"$PM" export events --tag "$tag" "${select[@]}" --extend -o "$events"
+		done
+		;;
+	house)
+		local select=("${SELECT[@]}" --exclude-tag house-primary --exclude-tag house-primaries
+			--exclude-title "State House")
+		say "events under house-elections"
+		"$PM" export events --tag house-elections "${select[@]}" --extend -o "$events"
+		say "events under midterms about the House"
+		"$PM" export events --tag midterms --search House "${select[@]}" --extend -o "$events"
+		;;
+	esac
+}
 
 say() { printf '%s\n' "$*" >&2; }
 
@@ -85,7 +127,7 @@ parquet() {
 	# Where DuckDB spills the sort of the history: on the dataset's disk, as
 	# /tmp may be memory.
 	scratch=$(mktemp -d "$OUT/.duckdb.XXXXXX")
-	(cd "$OUT" && "$DUCKDB" -bail -cmd "SET temp_directory = '$(basename "$scratch")'" -f "$HERE/senate-parquet.sql") || ok=$?
+	(cd "$OUT" && "$DUCKDB" -bail -cmd "SET temp_directory = '$(basename "$scratch")'" -f "$HERE/midterms-parquet.sql") || ok=$?
 	rm -rf "$scratch"
 	if ((ok != 0)); then
 		rm -f "$OUT"/*.parquet.tmp
@@ -107,14 +149,11 @@ run_all() {
 	tmp=$(mktemp -d)
 	trap 'rm -rf "$tmp"' EXIT
 	mkdir -p "$STORE"/by-market/{history,trades,book}
+	lock
 	: >"$OUT/errors.log"
-	# What the data is, for whoever (or whatever) reads it next.
-	cp "$HERE/senate-data.md" "$OUT/CLAUDE.md"
+	cp "$DOC" "$OUT/CLAUDE.md"
 
-	for tag in "${TAGS[@]}"; do
-		say "events under $tag"
-		"$PM" export events --tag "$tag" "${SELECT[@]}" --extend -o "$STORE/events.parquet"
-	done
+	select_events
 
 	local events=()
 	while read -r id; do events+=(--event "$id"); done < <(ids "$STORE/events.parquet")
@@ -141,4 +180,46 @@ run_all() {
 	failed=$(wc -l <"$OUT/errors.log")
 	rows
 	say "done in $(((SECONDS - started) / 60))m $(((SECONDS - started) % 60))s; $failed exports failed (see $OUT/errors.log)"
+}
+
+# dump makes the first dump, into an empty or absent directory.
+dump() {
+	if [[ -d $OUT && -n $(ls -A "$OUT") ]]; then
+		say "$OUT is not empty: extend it with $CHAMBER-extend.sh, or name another directory"
+		exit 1
+	fi
+	run_all
+}
+
+# extend brings a dump up to date.
+extend() {
+	need_dump
+	run_all
+}
+
+# rebuild builds the Parquet files from the store, fetching nothing.
+rebuild() {
+	need_dump
+	lock
+	cp "$DOC" "$OUT/CLAUDE.md"
+	parquet
+	rows
+}
+
+# lock waits for any other run on the same directory to end, and holds it
+# until this one does: the timer's extension may start while a dump or a run
+# by hand is still going, and two runs merging into one store would lose rows.
+lock() {
+	exec 9>"$OUT/.lock"
+	if ! flock -n 9; then
+		say "waiting for another run on $OUT to end"
+		flock 9
+	fi
+}
+
+need_dump() {
+	if [[ ! -f $STORE/markets.parquet ]]; then
+		say "$STORE holds no dump: run $CHAMBER-dump.sh first"
+		exit 1
+	fi
 }

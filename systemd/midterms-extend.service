@@ -1,10 +1,10 @@
-# Tracked in the repo at systemd/senate-extend.service, and installed into
-# ~/.config/systemd/user/ as a SYMLINK to it (see README, "The Senate midterms
-# dataset"), so editing it here and running `systemctl --user daemon-reload` is
+# Tracked in the repo at systemd/midterms-extend.service, and installed into
+# ~/.config/systemd/user/ as a SYMLINK to it (see README, "The midterms
+# datasets"), so editing it here and running `systemctl --user daemon-reload` is
 # the whole deploy. %h below assumes the repo is at ~/workspace/polymarket; a
 # clone anywhere else needs these paths changed.
 [Unit]
-Description=Extend the 2026 Senate midterms dataset from Polymarket
+Description=Extend the 2026 Senate and House midterms datasets from Polymarket
 Documentation=file:///home/farrellm/workspace/polymarket/README.md
 # A user manager cannot order against system units and has no
 # network-online.target: a start that beats the network fails and is retried by
@@ -20,11 +20,17 @@ WorkingDirectory=%h/workspace/polymarket
 ExecStartPre=/usr/bin/make build
 Environment=POLYMARKET=%h/workspace/polymarket/polymarket
 # The Parquet files are built with duckdb from /usr/bin (pacman -S duckdb).
-# The dataset is data/senate-midterms under the checkout, which git ignores.
-# The script refuses to run until senate-dump.sh has made it.
+# The datasets are data/senate-midterms and data/house-midterms under the
+# checkout, which git ignores. Each script refuses to run until its dump
+# (senate-dump.sh, house-dump.sh) has made it. They run one after the other,
+# never together: each process takes its own 10 requests a second, and two
+# runs at JOBS=2 would be four, over the price history's limit. A failure of
+# the Senate's skips the House's; the retry runs both again.
 ExecStart=%h/workspace/polymarket/scripts/senate-extend.sh
-# A run is about 35 minutes at the default JOBS=2; the bound only catches a wedge.
-TimeoutStartSec=4h
+ExecStart=%h/workspace/polymarket/scripts/house-extend.sh
+# A run is about 40 minutes for the Senate and 3½ hours for the House at the
+# default JOBS=2; the bound only catches a wedge.
+TimeoutStartSec=10h
 Nice=10
 IOSchedulingClass=idle
 # Only an export of the events, markets or outcomes failing fails the run (a

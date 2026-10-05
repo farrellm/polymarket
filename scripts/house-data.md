@@ -1,12 +1,12 @@
-# 2026 US Senate midterms: Polymarket data
+# 2026 US House midterms: Polymarket data
 
-<!-- Copied here from scripts/senate-data.md in the polymarket repository on every
-run of senate-dump.sh / senate-extend.sh / senate-parquet.sh: edit it there, not here. -->
+<!-- Copied here from scripts/house-data.md in the polymarket repository on every
+run of house-dump.sh / house-extend.sh / house-parquet.sh: edit it there, not here. -->
 
-Everything Polymarket offers on the 2026 US Senate midterms: the events, their markets
+Everything Polymarket offers on the 2026 US House midterms: the events, their markets
 and outcomes, and each market's price history, trades and order book. It was dumped
-first on 2026-10-02 by `scripts/senate-dump.sh` in `~/workspace/polymarket`. A
-systemd user timer (`midterms-extend.timer`) runs `scripts/senate-extend.sh` daily at
+first on 2026-10-04 by `scripts/house-dump.sh` in `~/workspace/polymarket`. A
+systemd user timer (`midterms-extend.timer`) runs `scripts/house-extend.sh` daily at
 02:00 to bring it up to date. `DESIGN.md` §6 in that repository covers how it is made.
 
 The data is **read-only output**: do not edit the files by hand. The next run merges into
@@ -15,19 +15,22 @@ unpredictably. It then rebuilds the Parquet files from them, which overwrites an
 
 ## What is selected
 
-Events tagged `senate-midterms` (the state races: winners, margins, turnout, county
-winners) or `senate-elections` (control of the chamber, its leaders, close-race and
-cross-race markets, and other Senate events such as confirmation votes). They are open
-or closed and end on or after 2026-01-01, **less**:
+Events tagged `house-elections` (the district races: each district's winner, and its
+margin of victory), and events tagged `midterms` whose title matches "House" (control
+of the chamber, seats by state, the Speaker, the popular vote, turnout, and markets on
+the House odds). No tag holds the control of the House as `senate-elections` does the
+Senate's, hence the search. They are open or closed and end on or after 2026-01-01,
+**less**:
 
-- primaries (tags `primaries`/`senate-primary`, or "primary" in the title);
-- state legislatures ("State Senate" in the title);
-- the French Senate ("French Senate").
+- primaries (tags `primaries`/`house-primary`/`house-primaries`, or "primary" in the
+  title);
+- state legislatures ("State House" in the title).
 
 The markets are **all the markets of those events**, chosen by their event and not by
-their own tags. On 2026-10-02 there were 167 events (18 closed) and 1,700 markets (152
-closed). 1,691 of the markets are Yes/No; the rest are "Closer Senate Race: X or Y?",
-whose outcomes are state names.
+their own tags. On 2026-10-04 there were 909 events (7 closed) and 8,858 markets (56
+closed). All but two of the markets are Yes/No: "Which party will win the House in
+2026?" has a market of Democratic Party/Republican Party, and one of the House-odds
+markets is Up/Down.
 
 ## Files
 
@@ -51,7 +54,7 @@ timestamps in UTC.
 columns and types as the files above. The exports merge into these files. At the end of
 every run, `scripts/midterms-parquet.sql` puts them together and sorts them into the six
 files above. The two hold the same rows; read the six, which are sorted and whole.
-`scripts/senate-parquet.sh` rebuilds them without fetching anything.
+`scripts/house-parquet.sh` rebuilds them without fetching anything.
 
 Joins: `markets.event_id = events.id`; `outcomes.market_id`, `history.market_id` and
 `book.market_id` = `markets.id`; `trades.condition_id = markets.condition_id`;
@@ -65,17 +68,14 @@ Joins: `markets.event_id = events.id`; `outcomes.market_id`, `history.market_id`
   shows them at fetch time; `best_bid`, `best_ask`, `last_trade_price`, `spread` and `change_*` are those of
   the **first** outcome only.
 - **NULL = Polymarket sent no value**, never zero. A market
-  that never traded has no volume; 283 markets have no `end_date` of their own (their
-  event has one).
+  that never traded has no volume.
 - **Closed** markets keep the last quotes they had, which are stale. Use `closed` before
   trusting `best_bid`/`best_ask`.
 - **Timestamps** are `TIMESTAMP WITH TIME ZONE`, stored in UTC.
 - **IDs are text.** This includes `token_id`, a 77-digit number that any numeric type
   would lose precision on. `condition_id` is hex. Market IDs sort as text.
 - `tags` is `|`-joined tag slugs. `url` is the page on polymarket.com.
-- Text is as Polymarket sent it: no spreadsheet guard. Until 2026-10-04 the CSV store
-  put a `'` before text starting with `= + - @`; 37 trader names had one, and lost it
-  when the store became Parquet.
+- Text is as Polymarket sent it: no spreadsheet guard.
 - The figures in `events`/`markets` (volume, liquidity, prices) are **as of the
   last run**: each run overwrites them. They are not a time series; `history` is.
 
@@ -99,22 +99,21 @@ One row per fill. A transaction can make several fills, so `transaction_hash` is
 unique. `side` is the taker's (`BUY`/`SELL`) of the outcome `outcome`/`outcome_index`,
 `size` is in shares, `price` is 0–1, and `size * price` is the USDC paid. A market's
 trades of every outcome are mixed together. `proxy_wallet` is the trader; `name` and
-`pseudonym` are their public profile, often NULL. Trades run from 2025-07 and grow
-sharply toward the election (40K in 2026-09).
+`pseudonym` are their public profile, often NULL. Trades grow sharply toward the
+election.
 
 ### book
 
 Each run adds one snapshot of the book of every **open** market that is taking orders:
 `timestamp` is the snapshot's. Within one, an outcome's bids come before its asks, and
 `level` is 1 at the best price. `size` is in shares. A closed market has no book, and
-neither does an open one not yet taking orders (e.g. "a candidate not listed above"),
-so about 840 of the 1,700 markets have one.
+neither does an open one not yet taking orders (e.g. "a candidate not listed above"):
+744 of the 8,802 open markets were not on 2026-10-04.
 
 ## Querying
 
-Use DuckDB or polars. On 2026-10-04, history was 4.2M rows in 3 MB of Parquet (1.5 GB
-as CSV), most of them 5-minute points; the whole store was 44 MB. The types are in the files, so a view needs no
-more than the file:
+Use DuckDB or polars. History is most of the rows, nearly all of them 5-minute points.
+The types are in the files, so a view needs no more than the file:
 
 ```sql
 SET TimeZone = 'UTC';  -- else date_trunc and the display use the local zone
@@ -125,16 +124,18 @@ CREATE VIEW history  AS FROM 'history.parquet';
 CREATE VIEW trades   AS FROM 'trades.parquet';
 CREATE VIEW book     AS FROM 'book.parquet';
 
--- the daily close of each market of "Which party will win the Senate in 2026?",
+-- the daily close of each market of "Which party will win the House in 2026?",
 -- from the 12-hour points: the Yes price of each of its markets
 SELECT m.question, date_trunc('day', h.timestamp) AS day, last(h.price ORDER BY h.timestamp) AS yes
 FROM history h JOIN markets m ON m.id = h.market_id
-WHERE m.event_slug = 'which-party-will-win-the-senate-in-2026'
+WHERE m.event_slug = 'which-party-will-win-the-house-in-2026'
   AND h.resolution_seconds = 43200 AND h.outcome_index = 0
 GROUP BY ALL ORDER BY m.question, day;
 ```
 
-An event usually has several markets (one per candidate or party). Its markets'
+An event usually has several markets (one per candidate or party, or one per bracket
+of a margin of victory). A district is in the event's title (`CA-22 House Election
+Winner`), not a column of its own. Its markets'
 outcomes are all called Yes and No, so always group by market (`market_id`,
 `question`), never by `outcome` alone.
 
@@ -146,6 +147,6 @@ journalctl --user -u midterms-extend                 # how the last runs went
 cat errors.log                                     # what the last run could not fetch
 ```
 
-A run takes 35–45 minutes at `JOBS=2`, the most that stays inside Polymarket's rate
-limits. The same timer then extends the House dataset, which takes a few hours more. A failed run leaves the Parquet files as they were. The store keeps whatever the run
+A run takes about 3½ hours at `JOBS=2`, the most that stays inside Polymarket's rate
+limits. The timer runs the Senate's extension first, so the House's starts around 02:40. A failed run leaves the Parquet files as they were. The store keeps whatever the run
 merged into it before it failed, and the next run's build picks that up.

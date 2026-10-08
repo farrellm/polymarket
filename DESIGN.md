@@ -104,7 +104,7 @@ internal/ui/                Bubble Tea models
 testdata/                   recorded API responses; golden/ holds the golden CSVs
 scripts/                    {senate,house}-{dump,extend,parquet}.sh and what they
                             share: the 2026 Senate and House midterms datasets (§6)
-systemd/                    midterms-extend.{service,timer}: the extensions daily at 02:00
+systemd/                    midterms-extend.{service,timer}: the extensions daily at 01:00
 Makefile  .golangci.yml  .github/workflows/ci.yml  .gitignore  README.md  LICENSE
 ```
 
@@ -691,7 +691,7 @@ sort spills to the dataset's disk, and the build takes 41 s. The six files hold 
 of history, 372 thousand trades and 618 thousand levels of book in 41 MB; the store is
 200 MB.
 
-`systemd/midterms-extend.timer` runs both extensions daily at 02:00 as a user unit
+`systemd/midterms-extend.timer` runs both extensions daily at 01:00 as a user unit
 (symlinked into `~/.config/systemd/user/`), `Persistent=` so that a run missed while the
 machine was off happens at boot: more than a week without one is a hole in the 5-minute
 history. The service builds the binary from the checkout first (`make build`), so the

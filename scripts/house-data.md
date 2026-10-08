@@ -7,7 +7,7 @@ Everything Polymarket offers on the 2026 US House midterms: the events, their ma
 and outcomes, and each market's price history, trades and order book. It was dumped
 first on 2026-10-04 by `scripts/house-dump.sh` in `~/workspace/polymarket`. A
 systemd user timer (`midterms-extend.timer`) runs `scripts/house-extend.sh` daily at
-02:00 to bring it up to date. `DESIGN.md` §6 in that repository covers how it is made.
+01:00 to bring it up to date. `DESIGN.md` §6 in that repository covers how it is made.
 
 The data is **read-only output**: do not edit the files by hand. The next run merges into
 the files under `store/` by key, and would keep a hand edit or overwrite it
@@ -148,5 +148,5 @@ cat errors.log                                     # what the last run could not
 ```
 
 A run takes about 3½ hours at `JOBS=2`, the most that stays inside Polymarket's rate
-limits. The timer runs the Senate's extension first, so the House's starts around 02:40. A failed run leaves the Parquet files as they were. The store keeps whatever the run
+limits. The timer runs the Senate's extension first, so the House's starts around 01:40. A failed run leaves the Parquet files as they were. The store keeps whatever the run
 merged into it before it failed, and the next run's build picks that up.

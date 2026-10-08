@@ -28,6 +28,11 @@ Environment=POLYMARKET=%h/workspace/polymarket/polymarket
 # the Senate's skips the House's; the retry runs both again.
 ExecStart=%h/workspace/polymarket/scripts/senate-extend.sh
 ExecStart=%h/workspace/polymarket/scripts/house-extend.sh
+# Then regenerate and commit the election-2026 site's datasets from both fresh
+# dumps (election-2026/systemd/election-2026-data.service). --no-block so this
+# run ends without waiting on it; `-` so a failure to start it doesn't fail the
+# run. A failed House step skips it until the retry.
+ExecStart=-/usr/bin/systemctl --user start --no-block election-2026-data.service
 # A run is about 40 minutes for the Senate and 3½ hours for the House at the
 # default JOBS=2; the bound only catches a wedge.
 TimeoutStartSec=10h

@@ -220,7 +220,7 @@ dataset; it must be installed (`pacman -S duckdb`).
 markets are fetched at once (2, which keeps within Polymarket's rate limits).
 Two runs on one directory wait for each other.
 
-`systemd/` has a user timer that runs both extensions daily at 02:00, one
+`systemd/` has a user timer that runs both extensions daily at 01:00, one
 after the other, with the binary built from the checkout first. The units are
 symlinked rather than copied, so a `systemctl --user daemon-reload` after
 editing them is the whole deploy:

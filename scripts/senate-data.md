@@ -7,7 +7,7 @@ Everything Polymarket offers on the 2026 US Senate midterms: the events, their m
 and outcomes, and each market's price history, trades and order book. It was dumped
 first on 2026-10-02 by `scripts/senate-dump.sh` in `~/workspace/polymarket`. A
 systemd user timer (`midterms-extend.timer`) runs `scripts/senate-extend.sh` daily at
-02:00 to bring it up to date. `DESIGN.md` §6 in that repository covers how it is made.
+01:00 to bring it up to date. `DESIGN.md` §6 in that repository covers how it is made.
 
 The data is **read-only output**: do not edit the files by hand. The next run merges into
 the files under `store/` by key, and would keep a hand edit or overwrite it

@@ -232,6 +232,9 @@ systemctl --user enable --now midterms-extend.timer
 journalctl --user -u midterms-extend    # how the last runs went
 ```
 
+After that, `make nightly-off` and `make nightly-on` turn the timer off and on.
+Turning it on after a missed 01:00 runs it at once.
+
 Both dumps have to have been made first. A run
 missed while the machine was off happens at the next boot; the user manager
 must linger (`loginctl enable-linger`) for it to run while you are logged out.

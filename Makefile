@@ -98,6 +98,21 @@ fixtures: ## re-record testdata/*.json from the live API
 smoke: ## check the client against the live API (not part of check)
 	go test -tags live -run '^TestLive$$' -count=1 -v ./internal/api/...
 
+# The nightly extension of the midterms datasets (systemd/, see the README).
+# The timer is enabled by its path because disabling a linked unit removes its
+# link. It is Persistent, so enabling it after a missed 01:00 runs it at once.
+TIMER := midterms-extend.timer
+
+.PHONY: nightly-on
+nightly-on: ## enable the nightly midterms extension
+	systemctl --user enable --now $(CURDIR)/systemd/$(TIMER)
+	@systemctl --user list-timers $(TIMER)
+
+.PHONY: nightly-off
+nightly-off: ## disable the nightly midterms extension
+	systemctl --user disable --now $(TIMER)
+	@echo "a run under way goes on: systemctl --user stop midterms-extend.service"
+
 .PHONY: run
 run: build ## build, then start polymarket
 	./$(BINARY)
